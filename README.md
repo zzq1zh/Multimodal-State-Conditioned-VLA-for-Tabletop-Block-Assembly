@@ -1,0 +1,75 @@
+# gym-so100-sim
+
+This repository provides **MuJoCo simulation** (Gymnasium single red cube task + 3×3 multicolor `so100_puzzle.xml` + mink IK), plus optional **OpenAI-compatible VLM planning → XVLA policy closed-loop** scripts.
+
+**Not included**: LeRobot **record/merge datasets**, real-robot dual-camera pipelines, etc. `vlm_to_actions.py` is **library-only** (OpenAI-compatible `chat/completions`, `plan_vla_instructions`, validators). VLM planning runs **inside** `sim_eval.py` when you set exactly one of `--instructions-file`, `--instructions-json`, or `--from-vlm-text`, optionally with repeatable `--vlm-image`, `--dotenv`, `--no-inventory-vlm`, `--no-vlm-sim-render`, and model overrides `--vlm-vision-model` / `--vlm-plan-model`.
+
+## Dependencies
+
+- Python **3.10–3.12** (on 3.13, `dm-control`’s `labmaze` often has no prebuilt wheel; 3.12 is recommended).  
+- **Simulation base**: `mujoco`, `dm-control`, `gymnasium`, `numpy`, `mink`  
+- **XVLA + OpenAI-compatible VLM** (optional): `pip install -e ".[xvla]"` → `torch`, `lerobot[transformers-dep]`, `python-dotenv`, `imageio[ffmpeg]`
+
+## Install
+
+```bash
+cd gym-so100-sim
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[test]"
+# For XVLA / OpenAI-compatible VLM planning runs:
+pip install -e ".[xvla]"
+```
+
+## Usage
+
+**Gymnasium environment** (`so100_transfer_cube.xml`):
+
+```python
+import gymnasium as gym
+import gym_so100  # noqa: F401
+
+env = gym.make("gym_so100/SO100TouchCube-v0")
+obs, _ = env.reset(seed=0)
+```
+
+**3×3 pick-and-place** (run from the repo root so `gym_so100/assets/so100_puzzle.xml` resolves):
+
+```bash
+# sim_scenes.py: --color {yellow|green|purple|orange} --cube-idx N --cell 0-8 [--seed] [--no-viewer] [--speed]
+python sim_scenes.py --color orange --cube-idx 2 --cell 2 --seed 42
+# vla_to_actions.py: fixed-layout demo [--no-viewer] [--speed]
+python vla_to_actions.py
+```
+
+### OpenAI-compatible VLM → XVLA (simulation)
+
+1. Set `OPENAI_API_KEY`. Optional: `OPENAI_BASE_URL` (default `https://api.openai.com/v1`), `OPENAI_MODEL`, `OPENAI_VISION_MODEL`, `OPENAI_PLAN_MODEL` (see `vlm_to_actions.py`), and/or a project-root `.env`; or pass `--dotenv /path/to/.env` on `sim_eval.py`.  
+2. Prepare a **LeRobot v3 dataset root** consistent with training (including `meta/info.json`) for preprocessor stats.  
+3. From the repo root (`sim_eval.py` requires **either** `--policy-id` **or** `--policy-path`):
+
+```bash
+# Random episodes (default): no instruction flags
+python sim_eval.py --policy-id YOUR/HF_REPO --dataset-root /path/to/lerobot_dataset --render
+
+# Instruction sequence: exactly one of --instructions-file | --instructions-json | --from-vlm-text
+python sim_eval.py \
+  --from-vlm-text "Form an X with cubes on the 3×3 grid." \
+  --policy-id YOUR/HF_REPO \
+  --dataset-root /path/to/lerobot_dataset \
+  --seed 0 --render --visual-task-guides
+
+# Or load instructions from JSON
+python sim_eval.py \
+  --instructions-file /tmp/plan.json \
+  --policy-id YOUR/HF_REPO \
+  --dataset-root /path/to/lerobot_dataset \
+  --seed 0 --render --visual-task-guides
+```
+
+Key files: `sim_scenes.py` (3×3 puzzle / IK CLI), `vla_to_actions.py` (task text, viewer guides, fixed-layout demo), `vla_adapter.py` (LeRobot + pick-place sim control), `sim_eval.py` (XVLA closed-loop eval + instruction / VLM modes), `vlm_to_actions.py` (OpenAI-compatible VLM → instruction list).
+
+## Tests
+
+```bash
+pytest -q
+```

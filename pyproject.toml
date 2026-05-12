@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gym-so100-sim"
+version = "0.1.0"
+description = "SO-ARM100 MuJoCo simulation + optional XVLA/VLM closed-loop eval (Gymnasium, pick-place grid)."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "numpy>=1.24",
+  "mujoco>=3.0",
+  "gymnasium>=1.0",
+  "dm-control>=1.0",
+  "mink>=0.0.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+xvla = [
+  "torch>=2.1",
+  "lerobot[transformers-dep]>=0.4.0",
+  "python-dotenv>=1.0.0",
+  "imageio[ffmpeg]>=2.34.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gym_so100*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

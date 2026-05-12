@@ -1,0 +1,96 @@
+<mujoco>
+    <include file="scene_so100.xml" />
+    <include file="trs_so_arm100/so_arm100_puzzle.xml" />
+
+    <worldbody>
+        <!-- ========== Source box: 仅底板（无玻璃围边，对齐真实场景无框源盒） ========== -->
+        <body name="source_box" pos="0.15 0.42 0.001" euler="0 0 1.5708">
+            <geom name="src_floor" type="box" size="0.11 0.06 0.003" pos="0 0 -0.003"
+                 rgba="1 1 1 1" />
+        </body>
+
+        <!-- ========== 9 cubes: 0.02m，位置由 vis_mujoco.py 根据盒子动态随机生成 ========== -->
+        <body name="cube_yellow_0" pos="0.15 0.42 0.012">
+            <joint name="cube_yellow_0_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_yellow_0_geom" rgba="1 1 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_yellow_1" pos="0.15 0.42 0.012">
+            <joint name="cube_yellow_1_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_yellow_1_geom" rgba="1 1 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_green_0" pos="0.15 0.42 0.012">
+            <joint name="cube_green_0_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_green_0_geom" rgba="0 0.6 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_purple_0" pos="0.15 0.42 0.012">
+            <joint name="cube_purple_0_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_purple_0_geom" rgba="0.5 0 0.5 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_purple_1" pos="0.15 0.42 0.012">
+            <joint name="cube_purple_1_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_purple_1_geom" rgba="0.5 0 0.5 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_purple_2" pos="0.15 0.42 0.012">
+            <joint name="cube_purple_2_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_purple_2_geom" rgba="0.5 0 0.5 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_orange_0" pos="0.15 0.42 0.012">
+            <joint name="cube_orange_0_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_orange_0_geom" rgba="1 0.5 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_orange_1" pos="0.15 0.42 0.012">
+            <joint name="cube_orange_1_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_orange_1_geom" rgba="1 0.5 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+        <body name="cube_orange_2" pos="0.15 0.42 0.012">
+            <joint name="cube_orange_2_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.0003 0.0003 0.0003" />
+            <geom size="0.01 0.01 0.01" type="box" name="cube_orange_2_geom" rgba="1 0.5 0 1"
+                  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
+        </body>
+
+        <!-- ========== 3x3 grid: 0.12×0.12m, 每格 0.04m。分隔线在 ±0.02 ========== -->
+        <body name="grid_base" pos="0 0.5 0.001">
+            <geom name="grid_floor" type="box" size="0.06 0.06 0.002" pos="0 0 -0.002"
+                 rgba="1 1 1 1" />
+            <geom name="grid_line_v1" type="box" size="0.002 0.06 0.001" pos="-0.02 0 0.001"
+                 rgba="0 0 0 1" />
+            <geom name="grid_line_v2" type="box" size="0.002 0.06 0.001" pos="0.02 0 0.001"
+                 rgba="0 0 0 1" />
+            <geom name="grid_line_h1" type="box" size="0.06 0.002 0.001" pos="0 -0.02 0.001"
+                 rgba="0 0 0 1" />
+            <geom name="grid_line_h2" type="box" size="0.06 0.002 0.001" pos="0 0.02 0.001"
+                 rgba="0 0 0 1" />
+        </body>
+
+        <!-- Cameras for dataset recording -->
+        <camera name="cam_global" pos="0.261 0.162 0.558" xyaxes="0.760 0.649 0.000 -0.512 0.599 0.616" />
+        <!-- Oblique camera looking from right side towards center -->
+        <camera name="cam_oblique" pos="0.356 0.731 0.420" xyaxes="-0.672 0.740 0.000 -0.478 -0.434 0.763" />
+
+        <!-- Top-down camera over center (original) -->
+        <camera name="top_down" pos="-0.1 0.55 0.6" xyaxes="1 0 0 0 1 0" fovy="50" />
+    </worldbody>
+
+    <keyframe>
+        <!-- qpos: 6 robot joints + 9 cubes x (3 pos + 4 quat) = 69。方块位置由 Python 动态覆盖 -->
+        <key name="home" qpos="0.0 -2.0 2.0 1.58 0.0 0.08  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0  0.15 0.42 0.012 1 0 0 0"
+            ctrl="0.0 -2.0 2.0 1.58 0.0 0.08" />
+    </keyframe>
+</mujoco>

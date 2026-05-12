@@ -1,0 +1,87 @@
+Metadata-Version: 2.4
+Name: gym-so100-sim
+Version: 0.2.0
+Summary: Qwen VLM instruction planning + LeRobot XVLA/SmolVLA inference helpers (no MuJoCo / Gymnasium).
+License: Apache-2.0
+Requires-Python: <3.13,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: python-dotenv>=1.0.0
+Provides-Extra: xvla
+Requires-Dist: torch>=2.1; extra == "xvla"
+Requires-Dist: lerobot[transformers-dep]>=0.4.0; extra == "xvla"
+
+# gym-so100-sim
+
+从母仓库 **gym-so100-c** 拆出的 **仅 VLM → VLA** 工具：无 MuJoCo、无 Gymnasium、无 `pick_place_grid` / eval 闭环脚本。
+
+| 模块 | 作用 |
+|------|------|
+| `qwen_vla_instruction_client.py` | DashScope（OpenAI 兼容）调用 Qwen-VL：自然语言 / 图像 → 标准 pick-place **英文指令 JSON**（含库存约束与句式校验）。 |
+| `xvla_lerobot_adapter.py` | 加载 LeRobot **XVLA / SmolVLA** 策略与 preprocessor；用 **numpy 三路相机 HWC + 关节状态 + task 文本** 组 batch，调用 `infer_xvla_action` 出动作。 |
+
+## 依赖
+
+- Python **3.10–3.12**（与 `lerobot` / `torch` 预编译 wheel 生态一致）。  
+- 基座：`numpy`、`python-dotenv`（`.env` 与 `load_env()`）。  
+- VLA：`pip install -e ".[xvla]"` → `torch`、`lerobot[transformers-dep]`。  
+- Qwen：需环境变量 `DASHSCOPE_API_KEY` 或 `QWEN_API_KEY`。
+
+## 安装
+
+```bash
+cd gym-so100-sim
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+pip install -e ".[xvla]"
+```
+
+## 用法
+
+**VLM 规划（命令行）**
+
+```bash
+export DASHSCOPE_API_KEY=sk-...
+python qwen_vla_instruction_client.py -t "先把绿色方块放到格子4" --json-out /tmp/plan.json
+python qwen_vla_instruction_client.py -t "..." -i scene.png -i wrist.png
+```
+
+**VLA 推理（Python API）**：自备与训练一致的三路 `uint8` 图像（键 `cam_global` / `cam_oblique` / `left_wrist`）、6 维关节状态、以及 LeRobot 数据集根（`meta/info.json`）用于 stats。
+
+```python
+from pathlib import Path
+import numpy as np
+import torch
+from xvla_lerobot_adapter import (
+    build_xvla_raw_batch,
+    infer_xvla_action,
+    load_policy_and_processors,
+    xvla_image_step_presence,
+)
+
+policy, pre, post, fps = load_policy_and_processors(
+    "YOUR/HF_OR_LOCAL_CHECKPOINT",
+    Path("/path/to/lerobot_dataset"),
+    torch.device("cuda"),
+)
+hf, hi = xvla_image_step_presence(pre)
+
+cams = {
+    "cam_global": np.zeros((480, 640, 3), dtype=np.uint8),
+    "cam_oblique": np.zeros((480, 640, 3), dtype=np.uint8),
+    "left_wrist": np.zeros((480, 640, 3), dtype=np.uint8),
+}
+qpos6 = np.zeros(6, dtype=np.float32)
+task = "Pick up the orange cube and place it in grid cell 4."
+raw = build_xvla_raw_batch(
+    env_camera_rgb=cams,
+    task_prompt=task,
+    joint_positions_for_state=qpos6,
+    policy_config=policy.config,
+    has_image_to_float=hf,
+    has_imagenet_normalize=hi,
+)
+action = infer_xvla_action(policy, pre, post, raw)
+```
+
+将 Qwen 输出的 `instructions` 逐条作为 `task` 与当步观测一起送入上述流程，即可在**任意仿真或真机**侧实现「VLM → VLA」对接；本仓库不再包含仿真器或 eval 脚本。

@@ -1,0 +1,6 @@
+numpy>=1.24
+python-dotenv>=1.0.0
+
+[xvla]
+torch>=2.1
+lerobot[transformers-dep]>=0.4.0
