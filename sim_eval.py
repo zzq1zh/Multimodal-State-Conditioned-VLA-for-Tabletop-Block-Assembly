@@ -14,6 +14,10 @@ Examples::
   python sim_eval.py --instructions-file /tmp/plan.json --policy-id USER/HF_REPO --dataset-root ...
 
 ``--video-out`` uses ``--video-camera`` (default ``cam_global``). ``--visual-task-guides`` adds target pillars.
+
+**JSON**: by default writes a pretty-printed summary to ``sim_eval_seed{seed}_episodes{N}.json`` (pick-place) or
+``sim_eval_seed{seed}_instruction_sequence.json`` (instruction mode); prints one compact JSON line to stdout unless
+``--no-json-summary-line``. Use ``--json-out PATH`` or ``--no-json-out-file`` to override.
 """
 
 from __future__ import annotations
@@ -582,6 +586,22 @@ def parse_args() -> argparse.Namespace:
         dest="early_stop_on_success",
         help="Disable early stop even after target cell success",
     )
+    p.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="Write eval summary JSON to this path (default: sim_eval_seed{seed}_episodes{N}.json unless --no-json-out-file)",
+    )
+    p.add_argument(
+        "--no-json-out-file",
+        action="store_true",
+        help="Do not write the default summary JSON file unless --json-out is set",
+    )
+    p.add_argument(
+        "--no-json-summary-line",
+        action="store_true",
+        help="Do not print the final summary JSON line to stdout",
+    )
     args = p.parse_args()
     if args.single_random_cube and args.generic_cube_instruction:
         p.error("Cannot use --single-random-cube together with --generic-cube-instruction")
@@ -593,6 +613,30 @@ def parse_args() -> argparse.Namespace:
     if inst_n > 1:
         p.error("At most one of --instructions-file, --instructions-json, --from-vlm-text")
     return args
+
+
+def _sim_eval_emit_json_report(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+    *,
+    default_path_stem: str,
+) -> None:
+    write_file = args.json_out is not None or not args.no_json_out_file
+    print_line = not args.no_json_summary_line
+    if not write_file and not print_line:
+        return
+    if args.json_out is not None:
+        out_path: Path | None = args.json_out
+    elif args.no_json_out_file:
+        out_path = None
+    else:
+        out_path = Path(f"sim_eval_seed{int(args.seed)}_{default_path_stem}.json")
+    out_payload = {**summary, "json_out_file": out_path.as_posix() if out_path is not None else None}
+    if write_file and out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(out_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if print_line:
+        print(json.dumps(out_payload, ensure_ascii=False), flush=True)
 
 
 def _instruction_sequence_mode(args: argparse.Namespace) -> bool:
@@ -1179,6 +1223,8 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
 
     substeps_per_policy = policy_physics_substeps_per_decision()
 
+    episode_rows: list[dict[str, Any]] = []
+
     for ep in range(args.episodes):
         policy.reset()
         mujoco.mj_resetDataKeyframe(mj_model, mj_data, 0)
@@ -1294,6 +1340,7 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
 
         stale_arm_steps = 0
         prev_arm = None
+        steps_done = 0
 
         for t in range(args.max_policy_steps):
             obs = build_obs_dict(
@@ -1406,6 +1453,43 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
 
         print(f"  done ({steps_done} policy steps, max {args.max_policy_steps})")
 
+        placement_ok = bool(
+            _placement_xy_ok_and_released(mj_model, mj_data, cube_name, target_cell)
+        )
+        episode_rows.append(
+            {
+                "episode_index": int(ep),
+                "task": task,
+                "cube_name": cube_name,
+                "target_cell": int(target_cell),
+                "placement_ok_released": placement_ok,
+                "policy_steps": int(steps_done),
+            }
+        )
+
+    ok_n = sum(1 for r in episode_rows if r["placement_ok_released"])
+    rate = (float(ok_n) / float(len(episode_rows))) if episode_rows else None
+    _sim_eval_emit_json_report(
+        args,
+        {
+            "schema": "sim_eval/pick_place/v1",
+            "seed": int(args.seed),
+            "episodes": int(args.episodes),
+            "policy_id": args.policy_id,
+            "policy_path": args.policy_path,
+            "dataset_root": args.dataset_root,
+            "device": args.device,
+            "render": bool(args.render),
+            "grasp_assist": bool(args.grasp_assist),
+            "early_stop_on_success": bool(args.early_stop_on_success),
+            "num_cubes": args.num_cubes,
+            "mean_placement_ok_released_rate": rate,
+            "placement_ok_episodes": int(ok_n),
+            "runs": episode_rows,
+        },
+        default_path_stem=f"episodes{int(args.episodes)}",
+    )
+
     renderer.close()
     if video_writer is not None:
         video_writer.close()
@@ -1421,7 +1505,23 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
 def main() -> int:
     args = parse_args()
     if _instruction_sequence_mode(args):
-        return main_instruction_sequence(args)
+        rc = int(main_instruction_sequence(args))
+        stats = getattr(args, "_sim_eval_instruction_placement_stats", None)
+        _sim_eval_emit_json_report(
+            args,
+            {
+                "schema": "sim_eval/instruction_sequence/v1",
+                "seed": int(args.seed),
+                "policy_id": args.policy_id,
+                "policy_path": args.policy_path,
+                "dataset_root": args.dataset_root,
+                "device": args.device,
+                "return_code": int(rc),
+                "placement_stats": stats,
+            },
+            default_path_stem="instruction_sequence",
+        )
+        return rc
     main_eval_pick_place(args)
     return 0
 

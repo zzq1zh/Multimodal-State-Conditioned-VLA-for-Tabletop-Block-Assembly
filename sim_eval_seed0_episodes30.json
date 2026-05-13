@@ -1,0 +1,258 @@
+{
+  "schema": "sim_eval/pick_place/v1",
+  "seed": 0,
+  "episodes": 30,
+  "policy_id": "zzq1zh/xvla-mink-merged-3cams-v8-27750steps-v",
+  "policy_path": null,
+  "dataset_root": "zzq1zh/dataset_large_merged_v8",
+  "device": "cuda",
+  "render": true,
+  "grasp_assist": false,
+  "early_stop_on_success": true,
+  "num_cubes": null,
+  "mean_placement_ok_released_rate": 1.0,
+  "placement_ok_episodes": 30,
+  "runs": [
+    {
+      "episode_index": 0,
+      "task": "Pick up the purple cube and place it in grid cell 8.",
+      "cube_name": "cube_purple_1",
+      "target_cell": 8,
+      "placement_ok_released": true,
+      "policy_steps": 242
+    },
+    {
+      "episode_index": 1,
+      "task": "Pick up the yellow cube and place it in grid cell 0.",
+      "cube_name": "cube_yellow_0",
+      "target_cell": 0,
+      "placement_ok_released": true,
+      "policy_steps": 230
+    },
+    {
+      "episode_index": 2,
+      "task": "Pick up the orange cube and place it in grid cell 6.",
+      "cube_name": "cube_orange_1",
+      "target_cell": 6,
+      "placement_ok_released": true,
+      "policy_steps": 230
+    },
+    {
+      "episode_index": 3,
+      "task": "Pick up the yellow cube and place it in grid cell 8.",
+      "cube_name": "cube_yellow_1",
+      "target_cell": 8,
+      "placement_ok_released": true,
+      "policy_steps": 230
+    },
+    {
+      "episode_index": 4,
+      "task": "Pick up the purple cube and place it in grid cell 2.",
+      "cube_name": "cube_purple_1",
+      "target_cell": 2,
+      "placement_ok_released": true,
+      "policy_steps": 195
+    },
+    {
+      "episode_index": 5,
+      "task": "Pick up the purple cube and place it in grid cell 3.",
+      "cube_name": "cube_purple_0",
+      "target_cell": 3,
+      "placement_ok_released": true,
+      "policy_steps": 234
+    },
+    {
+      "episode_index": 6,
+      "task": "Pick up the purple cube and place it in grid cell 5.",
+      "cube_name": "cube_purple_2",
+      "target_cell": 5,
+      "placement_ok_released": true,
+      "policy_steps": 249
+    },
+    {
+      "episode_index": 7,
+      "task": "Pick up the green cube and place it in grid cell 3.",
+      "cube_name": "cube_green_0",
+      "target_cell": 3,
+      "placement_ok_released": true,
+      "policy_steps": 218
+    },
+    {
+      "episode_index": 8,
+      "task": "Pick up the yellow cube and place it in grid cell 7.",
+      "cube_name": "cube_yellow_0",
+      "target_cell": 7,
+      "placement_ok_released": true,
+      "policy_steps": 220
+    },
+    {
+      "episode_index": 9,
+      "task": "Pick up the yellow cube and place it in grid cell 0.",
+      "cube_name": "cube_yellow_1",
+      "target_cell": 0,
+      "placement_ok_released": true,
+      "policy_steps": 220
+    },
+    {
+      "episode_index": 10,
+      "task": "Pick up the orange cube and place it in grid cell 1.",
+      "cube_name": "cube_orange_2",
+      "target_cell": 1,
+      "placement_ok_released": true,
+      "policy_steps": 237
+    },
+    {
+      "episode_index": 11,
+      "task": "Pick up the orange cube and place it in grid cell 0.",
+      "cube_name": "cube_orange_2",
+      "target_cell": 0,
+      "placement_ok_released": true,
+      "policy_steps": 229
+    },
+    {
+      "episode_index": 12,
+      "task": "Pick up the orange cube and place it in grid cell 8.",
+      "cube_name": "cube_orange_0",
+      "target_cell": 8,
+      "placement_ok_released": true,
+      "policy_steps": 234
+    },
+    {
+      "episode_index": 13,
+      "task": "Pick up the green cube and place it in grid cell 3.",
+      "cube_name": "cube_green_0",
+      "target_cell": 3,
+      "placement_ok_released": true,
+      "policy_steps": 221
+    },
+    {
+      "episode_index": 14,
+      "task": "Pick up the orange cube and place it in grid cell 2.",
+      "cube_name": "cube_orange_2",
+      "target_cell": 2,
+      "placement_ok_released": true,
+      "policy_steps": 213
+    },
+    {
+      "episode_index": 15,
+      "task": "Pick up the purple cube and place it in grid cell 5.",
+      "cube_name": "cube_purple_0",
+      "target_cell": 5,
+      "placement_ok_released": true,
+      "policy_steps": 257
+    },
+    {
+      "episode_index": 16,
+      "task": "Pick up the purple cube and place it in grid cell 1.",
+      "cube_name": "cube_purple_2",
+      "target_cell": 1,
+      "placement_ok_released": true,
+      "policy_steps": 218
+    },
+    {
+      "episode_index": 17,
+      "task": "Pick up the orange cube and place it in grid cell 6.",
+      "cube_name": "cube_orange_1",
+      "target_cell": 6,
+      "placement_ok_released": true,
+      "policy_steps": 239
+    },
+    {
+      "episode_index": 18,
+      "task": "Pick up the orange cube and place it in grid cell 7.",
+      "cube_name": "cube_orange_1",
+      "target_cell": 7,
+      "placement_ok_released": true,
+      "policy_steps": 241
+    },
+    {
+      "episode_index": 19,
+      "task": "Pick up the yellow cube and place it in grid cell 7.",
+      "cube_name": "cube_yellow_0",
+      "target_cell": 7,
+      "placement_ok_released": true,
+      "policy_steps": 245
+    },
+    {
+      "episode_index": 20,
+      "task": "Pick up the orange cube and place it in grid cell 4.",
+      "cube_name": "cube_orange_1",
+      "target_cell": 4,
+      "placement_ok_released": true,
+      "policy_steps": 245
+    },
+    {
+      "episode_index": 21,
+      "task": "Pick up the yellow cube and place it in grid cell 4.",
+      "cube_name": "cube_yellow_1",
+      "target_cell": 4,
+      "placement_ok_released": true,
+      "policy_steps": 344
+    },
+    {
+      "episode_index": 22,
+      "task": "Pick up the green cube and place it in grid cell 6.",
+      "cube_name": "cube_green_0",
+      "target_cell": 6,
+      "placement_ok_released": true,
+      "policy_steps": 227
+    },
+    {
+      "episode_index": 23,
+      "task": "Pick up the purple cube and place it in grid cell 1.",
+      "cube_name": "cube_purple_0",
+      "target_cell": 1,
+      "placement_ok_released": true,
+      "policy_steps": 224
+    },
+    {
+      "episode_index": 24,
+      "task": "Pick up the purple cube and place it in grid cell 0.",
+      "cube_name": "cube_purple_1",
+      "target_cell": 0,
+      "placement_ok_released": true,
+      "policy_steps": 219
+    },
+    {
+      "episode_index": 25,
+      "task": "Pick up the yellow cube and place it in grid cell 0.",
+      "cube_name": "cube_yellow_1",
+      "target_cell": 0,
+      "placement_ok_released": true,
+      "policy_steps": 226
+    },
+    {
+      "episode_index": 26,
+      "task": "Pick up the orange cube and place it in grid cell 4.",
+      "cube_name": "cube_orange_1",
+      "target_cell": 4,
+      "placement_ok_released": true,
+      "policy_steps": 262
+    },
+    {
+      "episode_index": 27,
+      "task": "Pick up the purple cube and place it in grid cell 6.",
+      "cube_name": "cube_purple_1",
+      "target_cell": 6,
+      "placement_ok_released": true,
+      "policy_steps": 239
+    },
+    {
+      "episode_index": 28,
+      "task": "Pick up the purple cube and place it in grid cell 8.",
+      "cube_name": "cube_purple_0",
+      "target_cell": 8,
+      "placement_ok_released": true,
+      "policy_steps": 221
+    },
+    {
+      "episode_index": 29,
+      "task": "Pick up the purple cube and place it in grid cell 5.",
+      "cube_name": "cube_purple_0",
+      "target_cell": 5,
+      "placement_ok_released": true,
+      "policy_steps": 225
+    }
+  ],
+  "json_out_file": "sim_eval_seed0_episodes30.json"
+}
