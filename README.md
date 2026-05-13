@@ -2,7 +2,7 @@
 
 This repository provides **MuJoCo simulation** (Gymnasium single red cube task + 3×3 multicolor `so100_puzzle.xml` + mink IK), plus optional **OpenAI-compatible VLM planning → XVLA policy closed-loop** scripts.
 
-**Not included**: LeRobot **record/merge datasets**, real-robot dual-camera pipelines, etc. `vlm_to_actions.py` is **library-only** (OpenAI-compatible `chat/completions`, `plan_vla_instructions`, validators). VLM planning runs **inside** `sim_eval.py` when you set exactly one of `--instructions-file`, `--instructions-json`, or `--from-vlm-text`, optionally with repeatable `--vlm-image`, `--dotenv`, `--no-inventory-vlm`, `--no-vlm-sim-render`, and model overrides `--vlm-vision-model` / `--vlm-plan-model`.
+**Not included**: LeRobot **record/merge datasets** or general robot pipelines outside this evaluation loop. `vlm_to_actions.py` is **library-only** (OpenAI-compatible `chat/completions`, `plan_vla_instructions`, validators). VLM planning runs **inside** `sim_eval.py` (for simulation) or `real_eval.py` (for physical deployment).
 
 ## Dependencies
 
@@ -67,6 +67,53 @@ python sim_eval.py \
 ```
 
 Key files: `sim_scenes.py` (3×3 puzzle / IK CLI), `vla_to_actions.py` (task text, viewer guides, fixed-layout demo), `vla_adapter.py` (LeRobot + pick-place sim control), `sim_eval.py` (XVLA closed-loop eval + instruction / VLM modes), `vlm_to_actions.py` (OpenAI-compatible VLM → instruction list).
+
+### Dual-view calibration (nine-grid)
+
+Before running real-robot evaluation, you need a calibration JSON that maps the 3×3 grid cells in both camera views. Use `calibrate_dual_view.py`:
+
+```bash
+python calibrate_dual_view.py \
+  --front /path/to/first_cam_front.png \
+  --side /path/to/first_cam_side.png \
+  --out outputs/real101_nine_grid_calib.json
+```
+
+Interactive workflow:
+1. Two images are displayed side-by-side (Front left, Side right).
+2. Click the 9 grid cell centers on the **Front** view in order 0→8 (row-major: top-left is 0, center is 4). Press **Space** when done.
+3. Click the same 9 points on the **Side** view in the same 0→8 order. Press **Space** to finish.
+4. Then click corresponding cube centers — first all visible cubes on Front (Space to advance), then the same cubes in the same order on Side (Space to finish). This estimates a homography for cross-view mapping.
+5. Press **R** to reset the current phase, **Esc** to abort.
+
+Key bindings during calibration: **Left click** = place point, **Space** = confirm phase, **R** = reset current phase, **Esc** = abort.
+
+Optional flags:
+- `--cube-pairs N`: fix exactly N cube pairs (instead of dynamic: click all visible then Space).
+- `--recalibrate`: overwrite an existing output file.
+- `--skip-dialog`: skip the Tkinter popup instructions.
+
+The output JSON contains `centers_front`, `centers_side` (9 grid points each) and optionally `cube_pairs_front`/`cube_pairs_side` plus a `view_mapping` with the estimated homography.
+
+**Note on beam overlays (real vs sim):** The real-robot beam overlay in `real_vision.py` uses simplified SAM2 parameters (lower alpha, wider Gaussian sigma) compared to the simulation pipeline, trading fine-grained mask detail for faster rendering on live camera feeds. Beam appearance can be customized by adjusting the hardcoded parameters in `real_vision.py` `BeamOverlayState.compute_statics()`.
+
+### OpenAI-compatible VLM → XVLA (real robot)
+
+1. Connect your SO-ARM100 and set `OPENAI_API_KEY` (or `DASHSCOPE_API_KEY` if using Qwen). 
+2. Generate a dual-view calibration JSON (see [Dual-view calibration](#dual-view-calibration-nine-grid) above).
+3. From the repo root, run the `real_eval.py` entrypoint:
+
+```bash
+python real_eval.py \
+  --port COM6 \
+  --policy-path YOUR/HF_REPO \
+  --dataset-repo-id YOUR/DATASET_REPO \
+  --calib-json outputs/real101_nine_grid_calib.json \
+  --user-text "Observe the cubes on the table. Generate at least 2 pick-and-place instructions." \
+  --vis --push-to-hub
+```
+
+Key files: `real_eval.py` (real robot evaluation loop), `real_vision.py` (YOLO board observation, SAM2 attached beam overlays, dual-view calibration loading), `calibrate_dual_view.py` (interactive dual-view nine-grid calibration script).
 
 ## Tests
 
