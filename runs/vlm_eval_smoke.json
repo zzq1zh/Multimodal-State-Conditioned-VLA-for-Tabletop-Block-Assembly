@@ -1,0 +1,15 @@
+{
+  "n_prompts": 1,
+  "mean_completion_over_nonnull": 0.3333333333333333,
+  "macro_completion": 0.3333333333333333,
+  "runs": [
+    {
+      "prompt_index": 0,
+      "prompt": "Sequence: purple to 2, then purple to 0, then green to 0. Respect cube inventory and use valid pick-place lines.",
+      "error": null,
+      "total_instructions": 3,
+      "successes": 1,
+      "completion": 0.3333333333333333
+    }
+  ]
+}

@@ -112,14 +112,93 @@ def build_obs_dict(
 
 
 _PLACE_XY_TOL = 0.015
+_PLACE_Z_TOL = 0.015
+_EE_LEFT_GRID_MARGIN = 0.01
 
 
 def _placement_xy_ok(model: mujoco.MjModel, data: mujoco.MjData, cube_name: str, target_cell: int) -> bool:
+    """True when cube center is within XYZ tolerance of target grid cell on tabletop."""
     pos = _body_pos(model, data, cube_name)
     gc = GRID_CENTERS[target_cell]
     return bool(
         abs(float(pos[0]) - float(gc[0])) <= _PLACE_XY_TOL
         and abs(float(pos[1]) - float(gc[1])) <= _PLACE_XY_TOL
+        and abs(float(pos[2]) - float(CUBE_Z)) <= _PLACE_Z_TOL
+    )
+
+
+def _cube_touches_jaw(model: mujoco.MjModel, data: mujoco.MjData, cube_name: str) -> bool:
+    """True when target cube is currently in contact with either jaw."""
+    cube_geoms: set[int] = set()
+    cg = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{cube_name}_geom"))
+    if cg >= 0:
+        cube_geoms.add(cg)
+    cube_bid = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, cube_name))
+    if cube_bid >= 0:
+        for g in range(int(model.ngeom)):
+            if int(model.geom_bodyid[g]) == cube_bid:
+                cube_geoms.add(g)
+    if not cube_geoms:
+        return False
+
+    jaw_geoms: set[int] = set()
+    for jaw_body in ("Fixed_Jaw", "Moving_Jaw"):
+        jaw_bid = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, jaw_body))
+        if jaw_bid >= 0:
+            for g in range(int(model.ngeom)):
+                if int(model.geom_bodyid[g]) == jaw_bid:
+                    jaw_geoms.add(g)
+    if not jaw_geoms:
+        return False
+
+    for ci in range(int(data.ncon)):
+        c = data.contact[ci]
+        g1, g2 = int(c.geom1), int(c.geom2)
+        if (g1 in cube_geoms and g2 in jaw_geoms) or (g2 in cube_geoms and g1 in jaw_geoms):
+            return True
+    return False
+
+
+def _ee_has_left_grid(model: mujoco.MjModel, data: mujoco.MjData) -> bool:
+    """
+    True when ee_site XY has moved outside the 3x3 grid footprint (with a small margin).
+    """
+    sid = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee_site"))
+    if sid < 0:
+        # If ee_site is unavailable, do not block early-stop on this condition.
+        return True
+    ee = data.site_xpos[sid]
+    ex, ey = float(ee[0]), float(ee[1])
+
+    xs = [float(gc[0]) for gc in GRID_CENTERS]
+    ys = [float(gc[1]) for gc in GRID_CENTERS]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    ux = sorted(set(xs))
+    uy = sorted(set(ys))
+    dx = min((abs(ux[i + 1] - ux[i]) for i in range(len(ux) - 1)), default=0.04)
+    dy = min((abs(uy[i + 1] - uy[i]) for i in range(len(uy) - 1)), default=0.04)
+    half_cell_x = 0.5 * float(dx)
+    half_cell_y = 0.5 * float(dy)
+
+    x_in = (min_x - half_cell_x - _EE_LEFT_GRID_MARGIN) <= ex <= (max_x + half_cell_x + _EE_LEFT_GRID_MARGIN)
+    y_in = (min_y - half_cell_y - _EE_LEFT_GRID_MARGIN) <= ey <= (max_y + half_cell_y + _EE_LEFT_GRID_MARGIN)
+    return not (x_in and y_in)
+
+
+def _placement_xy_ok_and_released(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    cube_name: str,
+    target_cell: int,
+) -> bool:
+    # Early-stop success means:
+    # 1) cube reached target cell, 2) gripper no longer touching cube, 3) ee_site has left the grid area.
+    return (
+        _placement_xy_ok(model, data, cube_name, target_cell)
+        and (not _cube_touches_jaw(model, data, cube_name))
+        and _ee_has_left_grid(model, data)
     )
 
 
@@ -382,13 +461,29 @@ def parse_args() -> argparse.Namespace:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--policy-id", type=str)
     g.add_argument("--policy-path", type=str)
-    p.add_argument("--dataset-root", type=Path, default=None)
+    p.add_argument(
+        "--dataset-root",
+        type=str,
+        default=None,
+        help="LeRobot dataset local path or remote repo id (e.g. owner/name)",
+    )
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--episodes", type=int, default=3)
     p.add_argument("--max-policy-steps", type=int, default=500)
     p.add_argument("--render", action="store_true")
-    p.add_argument("--visual-task-guides", action="store_true")
+    p.add_argument(
+        "--visual-task-guides",
+        action="store_true",
+        default=True,
+        help="Enable task indicator pillars (default: on)",
+    )
+    p.add_argument(
+        "--no-visual-task-guides",
+        action="store_false",
+        dest="visual_task_guides",
+        help="Disable task indicator pillars",
+    )
     p.add_argument("--video-out", type=Path, default=None)
     p.add_argument("--video-fps", type=int, default=20)
     p.add_argument("--video-camera", type=str, default="cam_global", metavar="CAM_NAME")
@@ -409,7 +504,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--early-stop-on-success",
         action="store_true",
+        default=True,
         help="Instruction-sequence: stop when cube XY reaches target cell",
+    )
+    p.add_argument(
+        "--no-early-stop-on-success",
+        action="store_false",
+        dest="early_stop_on_success",
+        help="Disable early stop even after target cell success",
     )
     args = p.parse_args()
     if args.single_random_cube and args.generic_cube_instruction:
@@ -754,6 +856,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
 
         stale_arm_steps = 0
         prev_arm = None
+        steps_done = 0
         for t in range(args.max_policy_steps):
             obs = build_obs_dict(
                 renderer,
@@ -850,10 +953,10 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                     )
                 viewer.sync()
 
-            if args.early_stop_on_success and _placement_xy_ok(
+            if args.early_stop_on_success and _placement_xy_ok_and_released(
                 mj_model, mj_data, cube_name, target_cell
             ):
-                print(f"  [seq] early success @ policy step {t + 1}")
+                print(f"  [seq] early success (placed + released) @ policy step {t + 1}")
                 _dump_dbg_camera(f"success_t{t + 1:04d}")
                 break
 
@@ -1163,7 +1266,15 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
                     )
                 viewer.sync()
 
-        print(f"  done ({args.max_policy_steps} policy steps)")
+            steps_done = t + 1
+            if args.early_stop_on_success and _placement_xy_ok_and_released(
+                mj_model, mj_data, cube_name, target_cell
+            ):
+                print(f"  [eval] early success (placed + released) @ policy step {t + 1}")
+                _dump_dbg_camera(f"success_t{t + 1:04d}")
+                break
+
+        print(f"  done ({steps_done} policy steps, max {args.max_policy_steps})")
 
     renderer.close()
     if video_writer is not None:

@@ -249,13 +249,38 @@ def resolve_lerobot_dataset_root_for_eval(
     If ``explicit`` is set, use it; otherwise try ``DEFAULT_LEROBOT_DATASET_DIR_CANDIDATES`` under ``script_parent``.
     """
     if explicit is not None:
-        root = Path(explicit).expanduser().resolve()
-        if not lerobot_dataset_has_meta(root):
+        explicit_s = str(explicit).strip()
+        p = Path(explicit_s).expanduser()
+        # Treat existing local paths as filesystem roots; otherwise try as a Hub repo id.
+        if p.exists():
+            root = p.resolve()
+            if not lerobot_dataset_has_meta(root):
+                raise FileNotFoundError(
+                    f"Not a valid LeRobot dataset root (missing meta/info.json): {root}"
+                )
+            print(f"[sim_eval] dataset root: {root}")
+            return root
+        try:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        except Exception as e:
             raise FileNotFoundError(
-                f"Not a valid LeRobot dataset root (missing meta/info.json): {root}"
-            )
-        print(f"[sim_eval] dataset root: {root}")
-        return root
+                f"Dataset root does not exist locally: {explicit_s!r}. "
+                "Also failed to import LeRobotDataset for remote repo resolution."
+            ) from e
+        try:
+            ds = LeRobotDataset(repo_id=hub_or_posix_path(explicit_s))
+            root = Path(ds.root).resolve()
+            if not lerobot_dataset_has_meta(root):
+                raise FileNotFoundError(
+                    f"Resolved remote dataset but missing meta/info.json: {root}"
+                )
+            print(f"[sim_eval] dataset root (remote): {root} <- {explicit_s}")
+            return root
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Not a valid local dataset path or remote repo id: {explicit_s!r}. "
+                "Expected a local root containing meta/info.json, or a downloadable LeRobot repo id."
+            ) from e
     for name in DEFAULT_LEROBOT_DATASET_DIR_CANDIDATES:
         c = (script_parent / name).resolve()
         if lerobot_dataset_has_meta(c):

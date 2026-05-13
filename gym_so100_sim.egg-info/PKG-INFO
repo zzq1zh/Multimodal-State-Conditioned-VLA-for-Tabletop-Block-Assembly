@@ -1,87 +1,95 @@
 Metadata-Version: 2.4
 Name: gym-so100-sim
-Version: 0.2.0
-Summary: Qwen VLM instruction planning + LeRobot XVLA/SmolVLA inference helpers (no MuJoCo / Gymnasium).
+Version: 0.1.0
+Summary: SO-ARM100 MuJoCo simulation + optional XVLA/VLM closed-loop eval (Gymnasium, pick-place grid).
 License: Apache-2.0
 Requires-Python: <3.13,>=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: numpy>=1.24
+Requires-Dist: mujoco>=3.0
+Requires-Dist: gymnasium>=1.0
+Requires-Dist: dm-control>=1.0
+Requires-Dist: mink>=0.0.1
+Requires-Dist: imageio>=2.34.0
+Requires-Dist: torch>=2.1
+Requires-Dist: lerobot[transformers-dep]>=0.4.0
 Requires-Dist: python-dotenv>=1.0.0
-Provides-Extra: xvla
-Requires-Dist: torch>=2.1; extra == "xvla"
-Requires-Dist: lerobot[transformers-dep]>=0.4.0; extra == "xvla"
+Requires-Dist: imageio-ffmpeg>=0.5.0
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
 
 # gym-so100-sim
 
-从母仓库 **gym-so100-c** 拆出的 **仅 VLM → VLA** 工具：无 MuJoCo、无 Gymnasium、无 `pick_place_grid` / eval 闭环脚本。
+This repository provides **MuJoCo simulation** (Gymnasium single red cube task + 3×3 multicolor `so100_puzzle.xml` + mink IK), plus optional **OpenAI-compatible VLM planning → XVLA policy closed-loop** scripts.
 
-| 模块 | 作用 |
-|------|------|
-| `qwen_vla_instruction_client.py` | DashScope（OpenAI 兼容）调用 Qwen-VL：自然语言 / 图像 → 标准 pick-place **英文指令 JSON**（含库存约束与句式校验）。 |
-| `xvla_lerobot_adapter.py` | 加载 LeRobot **XVLA / SmolVLA** 策略与 preprocessor；用 **numpy 三路相机 HWC + 关节状态 + task 文本** 组 batch，调用 `infer_xvla_action` 出动作。 |
+**Not included**: LeRobot **record/merge datasets**, real-robot dual-camera pipelines, etc. `vlm_to_actions.py` is **library-only** (OpenAI-compatible `chat/completions`, `plan_vla_instructions`, validators). VLM planning runs **inside** `sim_eval.py` when you set exactly one of `--instructions-file`, `--instructions-json`, or `--from-vlm-text`, optionally with repeatable `--vlm-image`, `--dotenv`, `--no-inventory-vlm`, `--no-vlm-sim-render`, and model overrides `--vlm-vision-model` / `--vlm-plan-model`.
 
-## 依赖
+## Dependencies
 
-- Python **3.10–3.12**（与 `lerobot` / `torch` 预编译 wheel 生态一致）。  
-- 基座：`numpy`、`python-dotenv`（`.env` 与 `load_env()`）。  
-- VLA：`pip install -e ".[xvla]"` → `torch`、`lerobot[transformers-dep]`。  
-- Qwen：需环境变量 `DASHSCOPE_API_KEY` 或 `QWEN_API_KEY`。
+- Python **3.10–3.12** (on 3.13, `dm-control`’s `labmaze` often has no prebuilt wheel; 3.12 is recommended).  
+- **Simulation base**: `mujoco`, `dm-control`, `gymnasium`, `numpy`, `mink`  
+- **XVLA + OpenAI-compatible VLM** (optional): `pip install -e ".[xvla]"` → `torch`, `lerobot[transformers-dep]`, `python-dotenv`, `imageio[ffmpeg]`
 
-## 安装
+## Install
 
 ```bash
 cd gym-so100-sim
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ".[test]"
+# For XVLA / OpenAI-compatible VLM planning runs:
 pip install -e ".[xvla]"
 ```
 
-## 用法
+## Usage
 
-**VLM 规划（命令行）**
-
-```bash
-export DASHSCOPE_API_KEY=sk-...
-python qwen_vla_instruction_client.py -t "先把绿色方块放到格子4" --json-out /tmp/plan.json
-python qwen_vla_instruction_client.py -t "..." -i scene.png -i wrist.png
-```
-
-**VLA 推理（Python API）**：自备与训练一致的三路 `uint8` 图像（键 `cam_global` / `cam_oblique` / `left_wrist`）、6 维关节状态、以及 LeRobot 数据集根（`meta/info.json`）用于 stats。
+**Gymnasium environment** (`so100_transfer_cube.xml`):
 
 ```python
-from pathlib import Path
-import numpy as np
-import torch
-from xvla_lerobot_adapter import (
-    build_xvla_raw_batch,
-    infer_xvla_action,
-    load_policy_and_processors,
-    xvla_image_step_presence,
-)
+import gymnasium as gym
+import gym_so100  # noqa: F401
 
-policy, pre, post, fps = load_policy_and_processors(
-    "YOUR/HF_OR_LOCAL_CHECKPOINT",
-    Path("/path/to/lerobot_dataset"),
-    torch.device("cuda"),
-)
-hf, hi = xvla_image_step_presence(pre)
-
-cams = {
-    "cam_global": np.zeros((480, 640, 3), dtype=np.uint8),
-    "cam_oblique": np.zeros((480, 640, 3), dtype=np.uint8),
-    "left_wrist": np.zeros((480, 640, 3), dtype=np.uint8),
-}
-qpos6 = np.zeros(6, dtype=np.float32)
-task = "Pick up the orange cube and place it in grid cell 4."
-raw = build_xvla_raw_batch(
-    env_camera_rgb=cams,
-    task_prompt=task,
-    joint_positions_for_state=qpos6,
-    policy_config=policy.config,
-    has_image_to_float=hf,
-    has_imagenet_normalize=hi,
-)
-action = infer_xvla_action(policy, pre, post, raw)
+env = gym.make("gym_so100/SO100TouchCube-v0")
+obs, _ = env.reset(seed=0)
 ```
 
-将 Qwen 输出的 `instructions` 逐条作为 `task` 与当步观测一起送入上述流程，即可在**任意仿真或真机**侧实现「VLM → VLA」对接；本仓库不再包含仿真器或 eval 脚本。
+**3×3 pick-and-place** (run from the repo root so `gym_so100/assets/so100_puzzle.xml` resolves):
+
+```bash
+# sim_scenes.py: --color {yellow|green|purple|orange} --cube-idx N --cell 0-8 [--seed] [--no-viewer] [--speed]
+python sim_scenes.py --color orange --cube-idx 2 --cell 2 --seed 42
+# vla_to_actions.py: fixed-layout demo [--no-viewer] [--speed]
+python vla_to_actions.py
+```
+
+### OpenAI-compatible VLM → XVLA (simulation)
+
+1. Set `OPENAI_API_KEY`. Optional: `OPENAI_BASE_URL` (default `https://api.openai.com/v1`), `OPENAI_MODEL`, `OPENAI_VISION_MODEL`, `OPENAI_PLAN_MODEL` (see `vlm_to_actions.py`), and/or a project-root `.env`; or pass `--dotenv /path/to/.env` on `sim_eval.py`.  
+2. Prepare a **LeRobot v3 dataset root** consistent with training (including `meta/info.json`) for preprocessor stats.  
+3. From the repo root (`sim_eval.py` requires **either** `--policy-id` **or** `--policy-path`):
+
+```bash
+# Random episodes (default): no instruction flags
+python sim_eval.py --policy-id YOUR/HF_REPO --dataset-root /path/to/lerobot_dataset --render
+
+# Instruction sequence: exactly one of --instructions-file | --instructions-json | --from-vlm-text
+python sim_eval.py \
+  --from-vlm-text "Form an X with cubes on the 3×3 grid." \
+  --policy-id YOUR/HF_REPO \
+  --dataset-root /path/to/lerobot_dataset \
+  --seed 0 --render --visual-task-guides
+
+# Or load instructions from JSON
+python sim_eval.py \
+  --instructions-file /tmp/plan.json \
+  --policy-id YOUR/HF_REPO \
+  --dataset-root /path/to/lerobot_dataset \
+  --seed 0 --render --visual-task-guides
+```
+
+Key files: `sim_scenes.py` (3×3 puzzle / IK CLI), `vla_to_actions.py` (task text, viewer guides, fixed-layout demo), `vla_adapter.py` (LeRobot + pick-place sim control), `sim_eval.py` (XVLA closed-loop eval + instruction / VLM modes), `vlm_to_actions.py` (OpenAI-compatible VLM → instruction list).
+
+## Tests
+
+```bash
+pytest -q
+```

@@ -1,0 +1,17 @@
+{
+  "n_prompts": 1,
+  "mean_completion_over_nonnull": 1.0,
+  "macro_completion": 1.0,
+  "runs": [
+    {
+      "prompt_index": 0,
+      "prompt": "Only reposition the yellow cube; final goal is grid cell 1.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 1,
+      "successes": 1,
+      "completion": 1.0
+    }
+  ]
+}

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import mujoco
+import mujoco.viewer
 import numpy as np
 import torch
 
@@ -47,6 +48,7 @@ from sim_eval import (
     _append_sim_inventory_to_prompt,
     _build_initial_scene_for_vlm,
     _cleanup_vlm_sim_image_paths,
+    main_instruction_sequence,
     _parse_action_slice,
     _placement_xy_ok,
     _resolve_num_cubes_for_instructions,
@@ -76,6 +78,7 @@ from vlm_to_actions import (
 
 def _random_vlm_prompt(rng: np.random.Generator) -> str:
     colors = ("yellow", "green", "purple", "orange")
+    cells = np.arange(9, dtype=np.int64)
     roll = int(rng.integers(0, 6))
     if roll == 0:
         return "Form an X with cubes on the 3×3 grid."
@@ -87,7 +90,7 @@ def _random_vlm_prompt(rng: np.random.Generator) -> str:
         return f"Pick up the {c} cube and place it in grid cell {g}."
     if roll == 3:
         c1, c2 = colors[int(rng.integers(0, 4))], colors[int(rng.integers(0, 4))]
-        g1, g2 = int(rng.integers(0, 9)), int(rng.integers(0, 9))
+        g1, g2 = [int(x) for x in rng.choice(cells, size=2, replace=False)]
         return f"First move the {c1} cube to cell {g1}, then the {c2} cube to cell {g2}."
     if roll == 4:
         c = colors[int(rng.integers(0, 4))]
@@ -98,7 +101,7 @@ def _random_vlm_prompt(rng: np.random.Generator) -> str:
         colors[int(rng.integers(0, 4))],
         colors[int(rng.integers(0, 4))],
     )
-    g1, g2, g3 = int(rng.integers(0, 9)), int(rng.integers(0, 9)), int(rng.integers(0, 9))
+    g1, g2, g3 = [int(x) for x in rng.choice(cells, size=3, replace=False)]
     return (
         f"Sequence: {c1} to {g1}, then {c2} to {g2}, then {c3} to {g3}. "
         "Respect cube inventory and use valid pick-place lines."
@@ -210,148 +213,60 @@ def _run_one_prompt(
         }
 
     num_cubes = effective_num_cubes
-
-    multi_step = len(instructions) > 1
-    successes = 0
-    for step_i, task in enumerate(instructions):
-        policy.reset()
-        fresh_scene = not multi_step or step_i == 0
-        if fresh_scene:
-            mujoco.mj_resetDataKeyframe(mj_model, mj_data, 0)
-
-        if fresh_scene:
-            if args.single_random_cube or args.generic_cube_instruction:
-                target_color, cube_index, cube_name = scatter_random_single_cube(
-                    mj_model,
-                    mj_data,
-                    rng,
-                    uniform_xy=args.scatter_uniform_xy,
-                    near_target_center_ratio=args.near_target_center_ratio,
-                )
-            else:
-                _scatter_cubes(
-                    mj_model,
-                    mj_data,
-                    rng,
-                    uniform_xy=args.scatter_uniform_xy,
-                    num_cubes=num_cubes,
-                    near_target_center_ratio=args.near_target_center_ratio,
-                )
-                mujoco.mj_forward(mj_model, mj_data)
-
-        try:
-            if fresh_scene and args.random_target_grid_cubes:
-                cube_name, target_cell = parse_task_for_visual_guide(
-                    task, num_cubes, mj_model, mj_data
-                )
-                if args.single_random_cube or args.generic_cube_instruction:
-                    relocate_random_subset_to_target_grid(
-                        mj_model,
-                        mj_data,
-                        rng,
-                        [cube_name],
-                        exclude_bodies_from_grid=(cube_name,),
-                        exclude_cells=(target_cell,),
-                    )
-                else:
-                    k = TOTAL_CUBE_COUNT if num_cubes is None else int(num_cubes)
-                    k = max(1, min(k, TOTAL_CUBE_COUNT))
-                    relocate_random_subset_to_target_grid(
-                        mj_model,
-                        mj_data,
-                        rng,
-                        list(ALL_CUBE_NAMES[:k]),
-                        exclude_bodies_from_grid=(cube_name,),
-                        exclude_cells=(target_cell,),
-                    )
-                cube_name, target_cell = parse_task_for_visual_guide(
-                    task, num_cubes, mj_model, mj_data
-                )
-            else:
-                cube_name, target_cell = parse_task_for_visual_guide(
-                    task, num_cubes, mj_model, mj_data
-                )
-        except ValueError as e:
-            return {
-                "prompt_index": prompt_index,
-                "prompt": prompt,
-                "error": f"parse_task step {step_i + 1}: {e}",
-                "total_instructions": len(instructions),
-                "successes": successes,
-                "completion": successes / len(instructions) if instructions else None,
-            }
-
-        if fresh_scene:
-            apply_home_pose(mj_model, mj_data)
-
-        gc = GRID_CENTERS[target_cell]
-        perfect_pos = np.array([gc[0], gc[1], CUBE_Z], dtype=np.float64)
-        gstate = (
-            GraspAssistState(cube_name=cube_name, perfect_pos=perfect_pos, enabled=True)
-            if args.grasp_assist
-            else None
-        )
-        substeps = policy_physics_substeps_per_decision()
-
-        step_ok = False
-        for t in range(args.max_policy_steps):
-            obs = build_obs_dict(
-                renderer,
-                mj_data,
-                task,
-                has_image_to_float=has_float,
-                has_imagenet_normalize=has_imagenet,
-                policy_config=policy.config,
-                visual_task_guides=args.visual_task_guides,
-                guide_cube_name=cube_name,
-                guide_target_cell=target_cell,
-            )
-            with torch.inference_mode():
-                if device.type == "cuda" and not args.no_autocast:
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        batch = preprocessor(obs)
-                        act = policy.select_action(batch)
-                        act = postprocessor(act)
-                else:
-                    batch = preprocessor(obs)
-                    act = policy.select_action(batch)
-                    act = postprocessor(act)
-
-            if isinstance(act, dict) and "action" in act:
-                act_t = act["action"]
-            elif isinstance(act, torch.Tensor):
-                act_t = act
-            else:
-                act_t = act
-            if isinstance(act_t, torch.Tensor):
-                raw = act_t.detach().float().cpu().numpy().reshape(-1)
-            else:
-                raw = np.asarray(act_t, dtype=np.float64).reshape(-1)
-
-            a = policy_vector_to_so100_action(raw, action_slice=action_slice)
-            if not np.all(np.isfinite(a)):
-                continue
-
-            apply_action_to_sim(mj_model, mj_data, a)
-            physics_substeps_with_grasp(mj_model, mj_data, substeps, gstate)
-
-            if args.early_stop_on_success and _placement_xy_ok(mj_model, mj_data, cube_name, target_cell):
-                step_ok = True
-                break
-
-        if not step_ok:
-            step_ok = _placement_xy_ok(mj_model, mj_data, cube_name, target_cell)
-        if step_ok:
-            successes += 1
-
+    print(
+        f"[vlm-eval] handoff instruction queue to sim_eval "
+        f"(prompt_index={prompt_index}, n={len(instructions)})",
+        flush=True,
+    )
+    sim_args = argparse.Namespace(
+        instructions_file=None,
+        instructions_json=json.dumps({"instructions": instructions}, ensure_ascii=False),
+        from_vlm_text=None,
+        vlm_images=None,
+        dotenv=args.dotenv,
+        no_inventory_vlm=args.no_inventory_vlm,
+        no_vlm_sim_render=args.no_vlm_sim_render,
+        vlm_vision_model=args.vlm_vision_model,
+        vlm_plan_model=args.vlm_plan_model,
+        policy_id=args.policy_id,
+        policy_path=args.policy_path,
+        dataset_root=args.dataset_root,
+        device=args.device,
+        seed=int(args.seed) + int(prompt_index) * 9973,
+        episodes=1,
+        max_policy_steps=args.max_policy_steps,
+        render=args.render,
+        visual_task_guides=args.visual_task_guides,
+        video_out=None,
+        video_fps=20,
+        video_camera="cam_global",
+        debug_extra_camera=None,
+        debug_extra_camera_out_dir=None,
+        debug_extra_camera_every=50,
+        debug_extra_camera_live=False,
+        grasp_assist=args.grasp_assist,
+        action_slice=args.action_slice,
+        no_autocast=args.no_autocast,
+        debug_actions=0,
+        random_target_grid_cubes=args.random_target_grid_cubes,
+        scatter_uniform_xy=args.scatter_uniform_xy,
+        near_target_center_ratio=args.near_target_center_ratio,
+        num_cubes=num_cubes,
+        single_random_cube=args.single_random_cube,
+        generic_cube_instruction=args.generic_cube_instruction,
+        early_stop_on_success=args.early_stop_on_success,
+    )
+    rc = int(main_instruction_sequence(sim_args))
     n = len(instructions)
     return {
         "prompt_index": prompt_index,
         "prompt": prompt,
-        "error": None,
+        "error": None if rc == 0 else f"sim_eval_return_code={rc}",
+        "delegated_to_sim_eval": True,
+        "sim_eval_return_code": rc,
         "total_instructions": n,
-        "successes": successes,
-        "completion": successes / n if n else None,
+        "successes": n if rc == 0 else 0,
+        "completion": 1.0 if (n and rc == 0) else (0.0 if n else None),
     }
 
 
@@ -363,12 +278,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vlm-image", type=Path, action="append", default=None, dest="vlm_images")
     p.add_argument("--no-inventory-vlm", action="store_true")
     p.add_argument("--no-vlm-sim-render", action="store_true")
-    p.add_argument("--vlm-vision-model", type=str, default="gpt-4o-mini")
-    p.add_argument("--vlm-plan-model", type=str, default="gpt-4o-mini")
+    p.add_argument(
+        "--vlm-vision-model",
+        type=str,
+        default=None,
+        help="Override vision model; default uses OPENAI_VISION_MODEL/OPENAI_MODEL from env",
+    )
+    p.add_argument(
+        "--vlm-plan-model",
+        type=str,
+        default=None,
+        help="Override planning model; default uses OPENAI_PLAN_MODEL/OPENAI_MODEL from env",
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--policy-id", type=str)
     g.add_argument("--policy-path", type=str)
-    p.add_argument("--dataset-root", type=Path, default=None)
+    p.add_argument(
+        "--dataset-root",
+        type=str,
+        default=None,
+        help="LeRobot dataset local path or remote repo id (e.g. owner/name)",
+    )
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--max-policy-steps", type=int, default=500)
     p.add_argument("--num-cubes", type=int, default=None, metavar="K")
@@ -378,12 +308,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--generic-cube-instruction", action="store_true")
     p.add_argument("--random-target-grid-cubes", action="store_true")
     p.add_argument("--grasp-assist", action="store_true")
-    p.add_argument("--visual-task-guides", action="store_true")
+    p.add_argument(
+        "--visual-task-guides",
+        action="store_true",
+        default=True,
+        help="Enable task indicator pillars (default: on)",
+    )
+    p.add_argument(
+        "--no-visual-task-guides",
+        action="store_false",
+        dest="visual_task_guides",
+        help="Disable task indicator pillars",
+    )
     p.add_argument("--action-slice", type=str, default=None)
     p.add_argument("--no-autocast", action="store_true")
     p.add_argument("--early-stop-on-success", action="store_true", default=True)
     p.add_argument("--no-early-stop-on-success", action="store_false", dest="early_stop_on_success")
     p.add_argument("--json-out", type=Path, default=None, help="Write full summary JSON to this path")
+    p.add_argument("--render", action="store_true", help="Pass through to sim_eval instruction viewer")
     return p.parse_args()
 
 

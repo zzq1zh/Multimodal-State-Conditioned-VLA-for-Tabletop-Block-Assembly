@@ -15,16 +15,15 @@ dependencies = [
   "gymnasium>=1.0",
   "dm-control>=1.0",
   "mink>=0.0.1",
+  "imageio>=2.34.0",
+  "torch>=2.1",
+  "lerobot[transformers-dep]>=0.4.0",
+  "python-dotenv>=1.0.0",
+  "imageio-ffmpeg>=0.5.0",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
-xvla = [
-  "torch>=2.1",
-  "lerobot[transformers-dep]>=0.4.0",
-  "python-dotenv>=1.0.0",
-  "imageio[ffmpeg]>=2.34.0",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]

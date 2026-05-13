@@ -1,0 +1,15 @@
+{
+  "n_prompts": 1,
+  "mean_completion_over_nonnull": 0.0,
+  "macro_completion": 0.0,
+  "runs": [
+    {
+      "prompt_index": 0,
+      "prompt": "Pick up the purple cube and place it in grid cell 6.",
+      "error": null,
+      "total_instructions": 1,
+      "successes": 0,
+      "completion": 0.0
+    }
+  ]
+}
