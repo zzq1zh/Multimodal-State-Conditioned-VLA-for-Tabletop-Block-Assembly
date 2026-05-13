@@ -5,10 +5,27 @@ resulting XVLA-style instruction list in MuJoCo (same stepping logic as sim_eval
 
 **Task completion (one prompt)**::
 
-    completion = (# instructions that end with the cube in the target cell) / (# VLM instructions)
+    ``completion`` = (# instructions that satisfy ``_placement_xy_ok_and_released`` after their policy block)
+    / (# VLM instructions). Counts come from ``sim_eval.main_instruction_sequence`` via
+    ``_sim_eval_instruction_placement_stats`` on the ``sim_args`` namespace.
 
-Cube placement is checked with the same XY tolerance as ``sim_eval._placement_xy_ok``.
-By default ``--early-stop-on-success`` is enabled so each instruction stops as soon as placement passes.
+Between prompts, the **same** policy, ``MjModel``, ``Renderer``, and (with ``--render``) passive viewer stay
+alive; only the pick-place scene is **refreshed** (re-keyframe, re-scatter, new VLM snapshots) before the next queue.
+
+Prompts come from a **fixed set of 30** English templates (each a **single line** of text). None of them state
+how many pick-place moves to use; longer tasks use chained ``First … then …`` wording. Each run shuffles the bank
+in blocks of 30 so the first 30 evaluations (and every subsequent full block of 30) never reuse the same prompt
+string within that block.
+
+**Stdout JSON**: each prompt prints one NDJSON line; after all prompts, one final line prints the full summary
+(including ``runs``). Use ``--no-json-summary-line`` to skip that final line.
+
+By default a **pretty-printed copy** is also written to
+``sim_vlm_eval_seed{seed}_n{n_prompts}.json`` in the current directory; override with ``--json-out PATH`` or
+disable with ``--no-json-out-file``.
+
+Progress and fatal configuration errors are one JSON object per line on **stderr** (``kind: "log"`` / ``"fatal"``)
+so stdout stays machine-parseable.
 
 Example::
 
@@ -29,45 +46,27 @@ from pathlib import Path
 from typing import Any
 
 import mujoco
-import mujoco.viewer
 import numpy as np
 import torch
 
-from sim_scenes import (
-    ALL_CUBE_NAMES,
-    CUBE_Z,
-    GRID_CENTERS,
-    TOTAL_CUBE_COUNT,
-    active_color_counts_for_num_cubes,
-    _scatter_cubes,
-    apply_home_pose,
-    relocate_random_subset_to_target_grid,
-    scatter_random_single_cube,
-)
+from sim_scenes import active_color_counts_for_num_cubes
 from sim_eval import (
     _append_sim_inventory_to_prompt,
     _build_initial_scene_for_vlm,
     _cleanup_vlm_sim_image_paths,
-    main_instruction_sequence,
-    _parse_action_slice,
-    _placement_xy_ok,
+    _refresh_initial_scene_for_vlm,
     _resolve_num_cubes_for_instructions,
+    _viewer_tick_between_instruction_batches,
     _write_vlm_sim_initial_images,
-    build_obs_dict,
+    main_instruction_sequence,
 )
 from vla_adapter import (
-    GraspAssistState,
-    apply_action_to_sim,
     hub_or_posix_path,
     load_policy_and_processors,
-    physics_substeps_with_grasp,
-    policy_physics_substeps_per_decision,
-    policy_vector_to_so100_action,
     resolve_local_policy_dir,
     resolve_lerobot_dataset_root_for_eval,
     xvla_image_step_presence,
 )
-from vla_to_actions import parse_task_for_visual_guide
 from vlm_to_actions import (
     load_env,
     plan_vla_instructions,
@@ -76,36 +75,58 @@ from vlm_to_actions import (
 )
 
 
-def _random_vlm_prompt(rng: np.random.Generator) -> str:
-    colors = ("yellow", "green", "purple", "orange")
-    cells = np.arange(9, dtype=np.int64)
-    roll = int(rng.integers(0, 6))
-    if roll == 0:
-        return "Form an X with cubes on the 3×3 grid."
-    if roll == 1:
-        return "Clear the source bin into the grid in a symmetric pattern."
-    if roll == 2:
-        c = colors[int(rng.integers(0, 4))]
-        g = int(rng.integers(0, 9))
-        return f"Pick up the {c} cube and place it in grid cell {g}."
-    if roll == 3:
-        c1, c2 = colors[int(rng.integers(0, 4))], colors[int(rng.integers(0, 4))]
-        g1, g2 = [int(x) for x in rng.choice(cells, size=2, replace=False)]
-        return f"First move the {c1} cube to cell {g1}, then the {c2} cube to cell {g2}."
-    if roll == 4:
-        c = colors[int(rng.integers(0, 4))]
-        g = int(rng.integers(0, 9))
-        return f"Only reposition the {c} cube; final goal is grid cell {g}."
-    c1, c2, c3 = (
-        colors[int(rng.integers(0, 4))],
-        colors[int(rng.integers(0, 4))],
-        colors[int(rng.integers(0, 4))],
-    )
-    g1, g2, g3 = [int(x) for x in rng.choice(cells, size=3, replace=False)]
-    return (
-        f"Sequence: {c1} to {g1}, then {c2} to {g2}, then {c3} to {g3}. "
-        "Respect cube inventory and use valid pick-place lines."
-    )
+# Thirty fixed natural-language prompts for VLM→sim eval. Each run shuffles this bank in blocks so
+# every batch of up to 30 prompts has no string-level duplicates. Each prompt is a **single line** and
+# describes **multiple** pick-place moves without stating how many. The first **15** use ``First … then …``
+# chains of varying length (three prompts per band); the rest use ``Sequence:`` or similar multi-move wording.
+_VLM_EVAL_PROMPT_BANK_30: tuple[str, ...] = (
+    # Three prompts per chain-length band (short through long ``then`` chains); strings never state a move count.
+    "Move the yellow cube to cell 0 first, and then place the green cube in cell 8.",
+    "Arrange the cubes on the 3×3 grid so that they form an X shape.",
+    "Start by putting the orange cube in cell 2, followed by the purple cube in cell 6.",
+    "Create a diagonal line across the grid using available cubes.",
+    "Place the green cube at cell 1 first; after that, move the yellow cube to cell 7.",
+    "Form a simple vertical stripe on the grid with distinct cube colors.",
+    "Begin with the yellow cube at cell 0, then move the green cube to cell 3, and finally place the purple cube in cell 8.",
+    "Arrange the cubes to form a partial X shape centered on cell 4.",
+    "First position the orange cube in cell 1, then put the purple cube in cell 4, and finish by moving the yellow cube to cell 7.",
+    "Place cubes around the center cell to create a cross-like layout.",
+    "Move the green cube into cell 2, then place the yellow cube at cell 5, and finally move the orange cube to cell 8.",
+    "Create a right-leaning diagonal arrangement on the 3×3 grid.",
+    "Place the yellow cube in cell 0 first, followed by the green cube in cell 2, the purple cube in cell 4, and the orange cube in cell 6.",
+    "Form an X-like pattern by placing cubes along both diagonals where possible.",
+    "Arrange the cubes in this order: orange to cell 1, purple to cell 3, yellow to cell 5, and green to cell 7.",
+    "Create a symmetric edge pattern using cells on opposite sides of the grid.",
+    "Fill the cells in reverse order by moving the green cube to cell 8, the yellow cube to cell 6, the purple cube to cell 4, and the orange cube to cell 2.",
+    "Use the available cubes to mark the four corners and the center of the grid.",
+    "Start with yellow at cell 0, continue with green at cell 2, then purple at cell 4, orange at cell 6, and finally move green again to cell 8.",
+    "Create a zigzag path across the 3×3 grid using the available cubes.",
+    "Follow this order: place yellow in cell 0, then green in cell 1, and finally purple in cell 2. Make sure the cube inventory is respected and each pick-place command is valid.",
+    "Use three cubes to create a short horizontal bar across one row of the grid.",
+    "Use valid pick-place actions to move orange to cell 3, yellow to cell 4, and green to cell 5 in sequence, while respecting the available cube inventory.",
+    "Build a checkerboard-like layout using alternating occupied cells where possible.",
+    "Place the cubes one by one: green in cell 6, purple in cell 7, and orange in cell 8. Ensure inventory limits and valid pick-place lines are followed.",
+    "Empty the source bin by placing the cubes onto the grid in a symmetric layout.",
+    "Using sequential pick-place commands, put the yellow cube in cell 0, the green cube in cell 3, and the purple cube in cell 6, while respecting inventory.",
+    "Build a left-column pattern from top to bottom using available cubes.",
+    "Place orange in cell 2, yellow in cell 4, and green in cell 8, executing the moves one at a time and observing inventory limits.",
+    "Create a short vertical segment on the right column."
+)
+
+
+def _vlm_prompt_sequence(rng: np.random.Generator, n: int) -> list[str]:
+    """Return ``n`` prompts; each consecutive block of up to 30 is a permutation of the bank (no repeats)."""
+    bank = _VLM_EVAL_PROMPT_BANK_30
+    if len(bank) != 30:
+        raise RuntimeError("internal: _VLM_EVAL_PROMPT_BANK_30 must have length 30")
+    out: list[str] = []
+    while len(out) < n:
+        perm = rng.permutation(30)
+        for j in perm:
+            out.append(bank[int(j)])
+            if len(out) >= n:
+                break
+    return out
 
 
 def _ns_for_vlm_preflight(args: argparse.Namespace, seed: int) -> argparse.Namespace:
@@ -123,14 +144,9 @@ def _run_one_prompt(
     mj_model: mujoco.MjModel,
     mj_data: mujoco.MjData,
     renderer: mujoco.Renderer,
-    policy: Any,
-    preprocessor: Any,
-    postprocessor: Any,
-    device: torch.device,
-    has_float: bool,
-    has_imagenet: bool,
-    action_slice: slice | None,
     rng: np.random.Generator,
+    reuse_ctx: dict[str, Any],
+    keep_open: bool,
 ) -> dict[str, Any]:
     vlm_temp_images: list[Path] = []
     instructions: list[str] = []
@@ -140,6 +156,13 @@ def _run_one_prompt(
         if not imgs and not args.no_vlm_sim_render:
             vlm_temp_images = _write_vlm_sim_initial_images(renderer, mj_data)
             imgs = list(vlm_temp_images)
+
+        _viewer_tick_between_instruction_batches(
+            reuse_ctx.get("viewer"),
+            mj_model,
+            mj_data,
+            visual_task_guides=bool(args.visual_task_guides),
+        )
 
         sim_counts = active_color_counts_for_num_cubes(int(scatter_k))
         plan_text = _append_sim_inventory_to_prompt(prompt, sim_counts)
@@ -214,9 +237,24 @@ def _run_one_prompt(
 
     num_cubes = effective_num_cubes
     print(
-        f"[vlm-eval] handoff instruction queue to sim_eval "
-        f"(prompt_index={prompt_index}, n={len(instructions)})",
+        json.dumps(
+            {
+                "schema": "sim_vlm_to_actions_eval/v1",
+                "kind": "log",
+                "event": "sim_eval_handoff",
+                "prompt_index": prompt_index,
+                "n_instructions": len(instructions),
+            },
+            ensure_ascii=False,
+        ),
+        file=sys.stderr,
         flush=True,
+    )
+    _viewer_tick_between_instruction_batches(
+        reuse_ctx.get("viewer"),
+        mj_model,
+        mj_data,
+        visual_task_guides=bool(args.visual_task_guides),
     )
     sim_args = argparse.Namespace(
         instructions_file=None,
@@ -256,8 +294,17 @@ def _run_one_prompt(
         generic_cube_instruction=args.generic_cube_instruction,
         early_stop_on_success=args.early_stop_on_success,
     )
+    sim_args._sim_eval_reuse = reuse_ctx
+    sim_args._sim_eval_keep_open = bool(keep_open)
     rc = int(main_instruction_sequence(sim_args))
     n = len(instructions)
+    stats = getattr(sim_args, "_sim_eval_instruction_placement_stats", None)
+    if stats is not None:
+        successes = max(0, min(int(stats["placement_ok_released"]), n))
+        completion = (float(successes) / float(n)) if n else None
+    else:
+        successes = 0
+        completion = None if not n else 0.0
     return {
         "prompt_index": prompt_index,
         "prompt": prompt,
@@ -265,8 +312,8 @@ def _run_one_prompt(
         "delegated_to_sim_eval": True,
         "sim_eval_return_code": rc,
         "total_instructions": n,
-        "successes": n if rc == 0 else 0,
-        "completion": 1.0 if (n and rc == 0) else (0.0 if n else None),
+        "successes": successes,
+        "completion": completion,
     }
 
 
@@ -324,7 +371,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-autocast", action="store_true")
     p.add_argument("--early-stop-on-success", action="store_true", default=True)
     p.add_argument("--no-early-stop-on-success", action="store_false", dest="early_stop_on_success")
-    p.add_argument("--json-out", type=Path, default=None, help="Write full summary JSON to this path")
+    p.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="Write full summary JSON to this path (default: sim_vlm_eval_seed{seed}_n{n}.json unless --no-json-out-file)",
+    )
+    p.add_argument(
+        "--no-json-out-file",
+        action="store_true",
+        help="Do not write the default auto-named summary file; overridden if --json-out is set",
+    )
+    p.add_argument(
+        "--no-json-summary-line",
+        action="store_true",
+        help="Do not print the final full-summary JSON line to stdout (per-prompt lines still print)",
+    )
     p.add_argument("--render", action="store_true", help="Pass through to sim_eval instruction viewer")
     return p.parse_args()
 
@@ -334,7 +396,18 @@ def main() -> int:
     load_env(args.dotenv.resolve() if args.dotenv else None)
 
     if args.single_random_cube and args.generic_cube_instruction:
-        print("Cannot use --single-random-cube together with --generic-cube-instruction", file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "schema": "sim_vlm_to_actions_eval/v1",
+                    "kind": "fatal",
+                    "exit_code": 1,
+                    "message": "Cannot use --single-random-cube together with --generic-cube-instruction",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 1
 
     if args.policy_id:
@@ -343,7 +416,18 @@ def main() -> int:
         policy_ref = resolve_local_policy_dir(Path(args.policy_path)).as_posix()
 
     if args.device != "cpu" and not torch.cuda.is_available():
-        print("CUDA requested but not available.", file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "schema": "sim_vlm_to_actions_eval/v1",
+                    "kind": "fatal",
+                    "exit_code": 1,
+                    "message": "CUDA requested but not available.",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 1
     device = torch.device(args.device)
 
@@ -355,17 +439,53 @@ def main() -> int:
         policy_ref, dataset_root, device
     )
     has_float, has_imagenet = xvla_image_step_presence(preprocessor)
-    action_slice = _parse_action_slice(args.action_slice)
+
+    reuse_ctx: dict[str, Any] = {
+        "policy": policy,
+        "preprocessor": preprocessor,
+        "postprocessor": postprocessor,
+        "device": device,
+        "has_float": has_float,
+        "has_imagenet": has_imagenet,
+        "mj_model": None,
+        "mj_data": None,
+        "renderer": None,
+        "viewer": None,
+    }
 
     rng = np.random.default_rng(int(args.seed))
     runs: list[dict[str, Any]] = []
     ratios: list[float] = []
 
-    for i in range(int(args.n_prompts)):
-        prompt = _random_vlm_prompt(rng)
+    n = int(args.n_prompts)
+    prompt_seq = _vlm_prompt_sequence(rng, n)
+    for i in range(n):
+        prompt = prompt_seq[i]
         seed_i = int(args.seed) + i * 9973
         ns = _ns_for_vlm_preflight(args, seed_i)
-        mj_model, mj_data, renderer, vlm_paths, scatter_k = _build_initial_scene_for_vlm(ns)
+        if reuse_ctx["mj_model"] is None:
+            mj_model, mj_data, renderer, vlm_paths, scatter_k = _build_initial_scene_for_vlm(ns)
+            reuse_ctx["mj_model"] = mj_model
+            reuse_ctx["mj_data"] = mj_data
+            reuse_ctx["renderer"] = renderer
+        else:
+            vlm_paths, scatter_k = _refresh_initial_scene_for_vlm(
+                reuse_ctx["mj_model"],
+                reuse_ctx["mj_data"],
+                reuse_ctx["renderer"],
+                ns,
+            )
+            mj_model = reuse_ctx["mj_model"]
+            mj_data = reuse_ctx["mj_data"]
+            renderer = reuse_ctx["renderer"]
+
+        _viewer_tick_between_instruction_batches(
+            reuse_ctx.get("viewer"),
+            mj_model,
+            mj_data,
+            visual_task_guides=bool(args.visual_task_guides),
+        )
+
         try:
             row = _run_one_prompt(
                 prompt=prompt,
@@ -375,14 +495,9 @@ def main() -> int:
                 mj_model=mj_model,
                 mj_data=mj_data,
                 renderer=renderer,
-                policy=policy,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                device=device,
-                has_float=has_float,
-                has_imagenet=has_imagenet,
-                action_slice=action_slice,
                 rng=np.random.default_rng(seed_i + 7),
+                reuse_ctx=reuse_ctx,
+                keep_open=(i < n - 1),
             )
         except Exception as e:
             row = {
@@ -395,7 +510,6 @@ def main() -> int:
             }
         finally:
             _cleanup_vlm_sim_image_paths(vlm_paths)
-            renderer.close()
 
         runs.append(row)
         c = row.get("completion")
@@ -404,8 +518,38 @@ def main() -> int:
 
         print(json.dumps(row, ensure_ascii=False), flush=True)
 
-    summary = {
+    r = reuse_ctx.get("renderer")
+    if r is not None:
+        try:
+            r.close()
+        except Exception:
+            pass
+    v = reuse_ctx.get("viewer")
+    if v is not None:
+        try:
+            v.close()
+        except Exception:
+            pass
+
+    if args.json_out is not None:
+        summary_json_path: Path | None = args.json_out
+    elif args.no_json_out_file:
+        summary_json_path = None
+    else:
+        summary_json_path = Path(
+            f"sim_vlm_eval_seed{int(args.seed)}_n{int(args.n_prompts)}.json"
+        )
+
+    summary: dict[str, Any] = {
+        "schema": "sim_vlm_to_actions_eval/v1",
+        "seed": int(args.seed),
         "n_prompts": int(args.n_prompts),
+        "policy_id": args.policy_id,
+        "policy_path": args.policy_path,
+        "dataset_root": args.dataset_root,
+        "device": args.device,
+        "render": bool(args.render),
+        "json_out_file": summary_json_path.as_posix() if summary_json_path is not None else None,
         "mean_completion_over_nonnull": float(np.mean(ratios)) if ratios else None,
         "macro_completion": (
             (
@@ -417,19 +561,11 @@ def main() -> int:
         ),
         "runs": runs,
     }
-    if args.json_out is not None:
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(
-        json.dumps(
-            {
-                "summary_mean_completion": summary["mean_completion_over_nonnull"],
-                "summary_macro_completion": summary["macro_completion"],
-            },
-            ensure_ascii=False,
-        ),
-        flush=True,
-    )
+    if summary_json_path is not None:
+        summary_json_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not args.no_json_summary_line:
+        print(json.dumps(summary, ensure_ascii=False), flush=True)
     return 0
 
 

@@ -1,0 +1,315 @@
+{
+  "schema": "sim_vlm_to_actions_eval/v1",
+  "seed": 0,
+  "n_prompts": 30,
+  "policy_id": "zzq1zh/xvla-mink-merged-3cams-v8-27750steps-v",
+  "policy_path": null,
+  "dataset_root": "zzq1zh/dataset_large_merged_v8",
+  "device": "cuda",
+  "render": true,
+  "json_out_file": "sim_vlm_eval_seed0_n30.json",
+  "mean_completion_over_nonnull": 0.9866666666666667,
+  "macro_completion": 0.9795918367346939,
+  "runs": [
+    {
+      "prompt_index": 0,
+      "prompt": "Start by putting the orange cube in cell 2, followed by the purple cube in cell 6.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 1,
+      "prompt": "Create a right-leaning diagonal arrangement on the 3×3 grid.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Using sequential pick-place commands, put the yellow cube in cell 0, the green cube in cell 3, and the purple cube in cell 6, while respecting inventory.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Use three cubes to create a short horizontal bar across one row of the grid.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "Move the green cube into cell 2, then place the yellow cube at cell 5, and finally move the orange cube to cell 8.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Place the green cube at cell 1 first; after that, move the yellow cube to cell 7.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Place orange in cell 2, yellow in cell 4, and green in cell 8, executing the moves one at a time and observing inventory limits.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 7,
+      "prompt": "Fill the cells in reverse order by moving the green cube to cell 8, the yellow cube to cell 6, the purple cube to cell 4, and the orange cube to cell 2.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 4,
+      "successes": 4,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 8,
+      "prompt": "Build a checkerboard-like layout using alternating occupied cells where possible.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 5,
+      "successes": 5,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 9,
+      "prompt": "Begin with the yellow cube at cell 0, then move the green cube to cell 3, and finally place the purple cube in cell 8.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 10,
+      "prompt": "Start with yellow at cell 0, continue with green at cell 2, then purple at cell 4, orange at cell 6, and finally move green again to cell 8.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 4,
+      "successes": 4,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 11,
+      "prompt": "Empty the source bin by placing the cubes onto the grid in a symmetric layout.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 6,
+      "successes": 6,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 12,
+      "prompt": "Create a diagonal line across the grid using available cubes.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 13,
+      "prompt": "Create a short vertical segment on the right column.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 14,
+      "prompt": "First position the orange cube in cell 1, then put the purple cube in cell 4, and finish by moving the yellow cube to cell 7.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 15,
+      "prompt": "Move the yellow cube to cell 0 first, and then place the green cube in cell 8.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 16,
+      "prompt": "Create a zigzag path across the 3×3 grid using the available cubes.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 5,
+      "successes": 4,
+      "completion": 0.8
+    },
+    {
+      "prompt_index": 17,
+      "prompt": "Place the yellow cube in cell 0 first, followed by the green cube in cell 2, the purple cube in cell 4, and the orange cube in cell 6.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 18,
+      "prompt": "Follow this order: place yellow in cell 0, then green in cell 1, and finally purple in cell 2. Make sure the cube inventory is respected and each pick-place command is valid.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 19,
+      "prompt": "Form an X-like pattern by placing cubes along both diagonals where possible.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 4,
+      "successes": 4,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 20,
+      "prompt": "Arrange the cubes to form a partial X shape centered on cell 4.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 21,
+      "prompt": "Form a simple vertical stripe on the grid with distinct cube colors.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 22,
+      "prompt": "Use the available cubes to mark the four corners and the center of the grid.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 5,
+      "successes": 5,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 23,
+      "prompt": "Arrange the cubes in this order: orange to cell 1, purple to cell 3, yellow to cell 5, and green to cell 7.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 24,
+      "prompt": "Use valid pick-place actions to move orange to cell 3, yellow to cell 4, and green to cell 5 in sequence, while respecting the available cube inventory.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 2,
+      "successes": 2,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 25,
+      "prompt": "Place cubes around the center cell to create a cross-like layout.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 5,
+      "successes": 4,
+      "completion": 0.8
+    },
+    {
+      "prompt_index": 26,
+      "prompt": "Build a left-column pattern from top to bottom using available cubes.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 27,
+      "prompt": "Place the cubes one by one: green in cell 6, purple in cell 7, and orange in cell 8. Ensure inventory limits and valid pick-place lines are followed.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 3,
+      "successes": 3,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 28,
+      "prompt": "Arrange the cubes on the 3×3 grid so that they form an X shape.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 4,
+      "successes": 4,
+      "completion": 1.0
+    },
+    {
+      "prompt_index": 29,
+      "prompt": "Create a symmetric edge pattern using cells on opposite sides of the grid.",
+      "error": null,
+      "delegated_to_sim_eval": true,
+      "sim_eval_return_code": 0,
+      "total_instructions": 4,
+      "successes": 4,
+      "completion": 1.0
+    }
+  ]
+}

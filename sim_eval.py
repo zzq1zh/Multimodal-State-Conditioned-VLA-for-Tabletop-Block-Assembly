@@ -392,8 +392,77 @@ def _build_initial_scene_for_vlm(
             near_target_center_ratio=args.near_target_center_ratio,
         )
     apply_home_pose(mj_model, mj_data)
+    mujoco.mj_forward(mj_model, mj_data)
     paths = _write_vlm_sim_initial_images(renderer, mj_data)
     return mj_model, mj_data, renderer, paths, k0
+
+
+def _refresh_initial_scene_for_vlm(
+    mj_model: mujoco.MjModel,
+    mj_data: mujoco.MjData,
+    renderer: mujoco.Renderer,
+    args: argparse.Namespace,
+) -> tuple[list[Path], int]:
+    """
+    Same scatter + home + three-camera snapshots as ``_build_initial_scene_for_vlm``, but reuse an
+    existing ``MjModel`` / ``MjData`` / ``Renderer`` (no XML reload). Returns ``(temp_png_paths, k_used)``.
+    """
+    rng = np.random.default_rng(int(args.seed))
+    mujoco.mj_resetDataKeyframe(mj_model, mj_data, 0)
+    k0 = int(args.num_cubes) if args.num_cubes is not None else TOTAL_CUBE_COUNT
+    if args.single_random_cube or args.generic_cube_instruction:
+        scatter_random_single_cube(
+            mj_model,
+            mj_data,
+            rng,
+            uniform_xy=args.scatter_uniform_xy,
+            near_target_center_ratio=args.near_target_center_ratio,
+        )
+    else:
+        _scatter_cubes(
+            mj_model,
+            mj_data,
+            rng,
+            uniform_xy=args.scatter_uniform_xy,
+            num_cubes=k0,
+            near_target_center_ratio=args.near_target_center_ratio,
+        )
+    apply_home_pose(mj_model, mj_data)
+    mujoco.mj_forward(mj_model, mj_data)
+    paths = _write_vlm_sim_initial_images(renderer, mj_data)
+    return paths, k0
+
+
+def _viewer_tick_between_instruction_batches(
+    viewer,
+    mj_model: mujoco.MjModel,
+    mj_data: mujoco.MjData,
+    *,
+    visual_task_guides: bool,
+) -> None:
+    """
+    Keep ``launch_passive`` responsive across long CPU/network gaps (e.g. VLM HTTP calls).
+
+    Without periodic ``sync()``, the passive viewer / internal simulate bridge can appear hung or
+    block returning to the next instruction batch.
+    """
+    if viewer is None:
+        return
+    try:
+        if not viewer.is_running():
+            return
+        if visual_task_guides:
+            sync_viewer_task_guides(
+                viewer,
+                mj_model,
+                mj_data,
+                cube_name="",
+                target_cell=0,
+                enabled=False,
+            )
+        viewer.sync()
+    except Exception:
+        pass
 
 
 def _load_instructions_from_file(path: Path) -> list[str]:
@@ -611,10 +680,24 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
         return 1
     instructions = ok
 
+    total_inst = len(instructions)
+    placement_ok_count = 0
+
+    def _flush_placement_stats() -> None:
+        setattr(
+            args,
+            "_sim_eval_instruction_placement_stats",
+            {
+                "placement_ok_released": int(placement_ok_count),
+                "total_instructions": int(total_inst),
+            },
+        )
+
     if per_color_budget is not None:
         vk, vm = validate_instructions_against_vlm_inventory(instructions, per_color_budget)
         if not vk:
             print(vm, file=sys.stderr)
+            _flush_placement_stats()
             return 1
 
     nc_err, effective_num_cubes = _resolve_num_cubes_for_instructions(
@@ -625,6 +708,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
     )
     if nc_err:
         print(nc_err, file=sys.stderr)
+        _flush_placement_stats()
         return 1
 
     if (
@@ -641,26 +725,40 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
 
     action_slice = _parse_action_slice(args.action_slice)
 
-    if args.policy_id:
-        policy_ref = hub_or_posix_path(args.policy_id)
+    reuse = getattr(args, "_sim_eval_reuse", None)
+    if reuse is not None:
+        policy = reuse["policy"]
+        preprocessor = reuse["preprocessor"]
+        postprocessor = reuse["postprocessor"]
+        device = reuse["device"]
+        has_float = bool(reuse["has_float"])
+        has_imagenet = bool(reuse["has_imagenet"])
     else:
-        policy_ref = resolve_local_policy_dir(Path(args.policy_path)).as_posix()
+        if args.policy_id:
+            policy_ref = hub_or_posix_path(args.policy_id)
+        else:
+            policy_ref = resolve_local_policy_dir(Path(args.policy_path)).as_posix()
 
-    if args.device != "cpu" and not torch.cuda.is_available():
-        print("CUDA requested but not available.", file=sys.stderr)
-        return 1
-    device = torch.device(args.device)
+        if args.device != "cpu" and not torch.cuda.is_available():
+            print("CUDA requested but not available.", file=sys.stderr)
+            _flush_placement_stats()
+            return 1
+        device = torch.device(args.device)
 
-    dataset_root = resolve_lerobot_dataset_root_for_eval(
-        args.dataset_root,
-        script_parent=Path(__file__).resolve().parent,
-    )
-    policy, preprocessor, postprocessor, _fps = load_policy_and_processors(
-        policy_ref, dataset_root, device
-    )
-    has_float, has_imagenet = xvla_image_step_presence(preprocessor)
+        dataset_root = resolve_lerobot_dataset_root_for_eval(
+            args.dataset_root,
+            script_parent=Path(__file__).resolve().parent,
+        )
+        policy, preprocessor, postprocessor, _fps = load_policy_and_processors(
+            policy_ref, dataset_root, device
+        )
+        has_float, has_imagenet = xvla_image_step_presence(preprocessor)
 
-    if mj_preflight is not None:
+    if reuse is not None and reuse.get("mj_model") is not None:
+        mj_model = reuse["mj_model"]
+        mj_data = reuse["mj_data"]
+        renderer = reuse["renderer"]
+    elif mj_preflight is not None:
         mj_model, mj_data, renderer = mj_preflight
     else:
         mj_model = mujoco.MjModel.from_xml_path(str(_XML))
@@ -672,7 +770,23 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
     if args.render:
         from mujoco.viewer import launch_passive as _launch_passive_viewer
 
-        viewer = _launch_passive_viewer(mj_model, mj_data, show_left_ui=False, show_right_ui=False)
+        if reuse is not None and reuse.get("viewer") is not None:
+            v0 = reuse["viewer"]
+            try:
+                if v0.is_running():
+                    viewer = v0
+                else:
+                    reuse["viewer"] = None
+                    viewer = _launch_passive_viewer(mj_model, mj_data, show_left_ui=False, show_right_ui=False)
+                    reuse["viewer"] = viewer
+            except Exception:
+                reuse["viewer"] = None
+                viewer = _launch_passive_viewer(mj_model, mj_data, show_left_ui=False, show_right_ui=False)
+                reuse["viewer"] = viewer
+        else:
+            viewer = _launch_passive_viewer(mj_model, mj_data, show_left_ui=False, show_right_ui=False)
+            if reuse is not None:
+                reuse["viewer"] = viewer
 
     video_writer = None
     video_cam = str(args.video_camera or "cam_global").strip()
@@ -681,6 +795,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
     vid_cid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_CAMERA, video_cam)
     if int(vid_cid) < 0:
         print(f"[seq] video camera not found: {video_cam!r}", file=sys.stderr)
+        _flush_placement_stats()
         return 1
     if args.video_out is not None:
         out = args.video_out.resolve()
@@ -697,6 +812,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
         cid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_CAMERA, dbg_cam)
         if int(cid) < 0:
             print(f"[seq] debug camera not found: {dbg_cam!r}", file=sys.stderr)
+            _flush_placement_stats()
             return 1
         dbg_out_dir = (
             args.debug_extra_camera_out_dir.resolve()
@@ -716,6 +832,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                 dbg_live = False
     elif dbg_live:
         print("[seq] --debug-extra-camera-live requires --debug-extra-camera", file=sys.stderr)
+        _flush_placement_stats()
         return 1
 
     substeps_per_policy = policy_physics_substeps_per_decision()
@@ -783,6 +900,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                 )
         except ValueError as e:
             print(f"[seq] step {step_i + 1}: could not parse task line: {e}", file=sys.stderr)
+            _flush_placement_stats()
             return 1
 
         if fresh_scene:
@@ -960,19 +1078,31 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                 _dump_dbg_camera(f"success_t{t + 1:04d}")
                 break
 
+        if _placement_xy_ok_and_released(mj_model, mj_data, cube_name, target_cell):
+            placement_ok_count += 1
+
         print(f"  step block done (max {args.max_policy_steps})")
 
-    renderer.close()
+    keep_open = bool(getattr(args, "_sim_eval_keep_open", False))
+    if keep_open and viewer is not None:
+        _viewer_tick_between_instruction_batches(
+            viewer, mj_model, mj_data, visual_task_guides=bool(args.visual_task_guides)
+        )
+    if not keep_open:
+        renderer.close()
     if video_writer is not None:
         video_writer.close()
         print(f"Video saved: {args.video_out}")
-    if viewer is not None:
+    if viewer is not None and not keep_open:
         viewer.close()
-    if dbg_live and cv2_dbg is not None:
+        if reuse is not None:
+            reuse["viewer"] = None
+    if dbg_live and cv2_dbg is not None and not keep_open:
         try:
             cv2_dbg.destroyWindow(dbg_win)
         except Exception:
             pass
+    _flush_placement_stats()
     return 0
 
 def main_eval_pick_place(args: argparse.Namespace) -> None:
