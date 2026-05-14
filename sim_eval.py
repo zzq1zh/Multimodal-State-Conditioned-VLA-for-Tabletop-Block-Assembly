@@ -13,7 +13,8 @@ Examples::
   python sim_eval.py --policy-id USER/HF_REPO --dataset-root /path/to/lerobot_dataset --render
   python sim_eval.py --instructions-file /tmp/plan.json --policy-id USER/HF_REPO --dataset-root ...
 
-``--video-out`` uses ``--video-camera`` (default ``cam_global``). ``--visual-task-guides`` adds target pillars.
+``--video-out`` uses ``--video-camera`` (default ``cam_global``). Optional ``--video-overlay-text`` draws a bottom
+caption strip on each frame (OpenCV). ``--visual-task-guides`` adds target pillars.
 
 **JSON**: by default writes a pretty-printed summary to ``sim_eval_seed{seed}_episodes{N}.json`` (pick-place) or
 ``sim_eval_seed{seed}_instruction_sequence.json`` (instruction mode); prints one compact JSON line to stdout unless
@@ -87,6 +88,74 @@ def _parse_action_slice(spec: str | None):
     if len(parts) != 2:
         raise ValueError(f"Invalid --action-slice {spec!r}, expected START:END")
     return slice(int(parts[0]), int(parts[1]))
+
+
+def _video_overlay_lines(text: str, *, max_chars: int, max_lines: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in (text or "").replace("\r", "").split("\n"):
+        s = raw_line.strip()
+        if not s:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        while s:
+            if len(lines) >= max_lines:
+                lines.append("...")
+                return lines
+            lines.append(s[:max_chars])
+            s = s[max_chars:].lstrip()
+    return lines[:max_lines] if lines else []
+
+
+_cv2_video_overlay_warned = False
+
+
+def apply_video_overlay_rgb(rgb: np.ndarray, overlay_text: str | None) -> np.ndarray:
+    """Draw a bottom caption on RGB uint8 frames (best effort; requires OpenCV)."""
+    global _cv2_video_overlay_warned
+    t = (overlay_text or "").strip()
+    if not t:
+        return rgb
+    try:
+        import cv2
+    except Exception as e:
+        if not _cv2_video_overlay_warned:
+            _cv2_video_overlay_warned = True
+            print(f"[sim_eval] video overlay skipped (OpenCV unavailable): {e}", file=sys.stderr)
+        return rgb
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    h, w = bgr.shape[:2]
+    max_chars = max(12, w // 7)
+    max_lines = min(14, max(2, h // 28))
+    body = _video_overlay_lines(t, max_chars=max_chars, max_lines=max_lines)
+    if not body:
+        return rgb
+    line_h = 18
+    pad_top = 14
+    bar_h = min(int(h * 0.42), pad_top + len(body) * line_h + 12)
+    bar_h = max(bar_h, pad_top + line_h + 8)
+    bar_h = min(bar_h, h - 2)
+    out = bgr.copy()
+    y_top = h - bar_h
+    cv2.rectangle(out, (0, y_top), (w, h), (28, 28, 28), -1)
+    y = y_top + pad_top
+    for line in body:
+        cv2.putText(out, line, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 230, 230), 1, cv2.LINE_AA)
+        y += line_h
+        if y > h - 6:
+            break
+    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+
+
+def finalize_sim_eval_video_frame(
+    video_writer,
+    renderer: mujoco.Renderer,
+    overlay_text: str | None,
+) -> None:
+    rgb = renderer.render()
+    if overlay_text:
+        rgb = apply_video_overlay_rgb(rgb, overlay_text)
+    video_writer.append_data(rgb)
 
 
 def build_obs_dict(
@@ -558,8 +627,15 @@ def parse_args() -> argparse.Namespace:
         help="Disable task indicator pillars",
     )
     p.add_argument("--video-out", type=Path, default=None)
-    p.add_argument("--video-fps", type=int, default=20)
+    p.add_argument("--video-fps", type=int, default=30)
     p.add_argument("--video-camera", type=str, default="cam_global", metavar="CAM_NAME")
+    p.add_argument(
+        "--video-overlay-text",
+        type=str,
+        default=None,
+        metavar="TEXT",
+        help="If set with --video-out, draw this caption on each frame (bottom strip; needs OpenCV).",
+    )
     p.add_argument("--debug-extra-camera", type=str, default=None, metavar="CAM_NAME")
     p.add_argument("--debug-extra-camera-out-dir", type=Path, default=None)
     p.add_argument("--debug-extra-camera-every", type=int, default=50, metavar="N")
@@ -847,6 +923,9 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
         video_writer = imageio.get_writer(str(out), fps=args.video_fps)
         print(f"[seq] Writing video: {out} (fps={args.video_fps}, camera={video_cam})")
 
+    raw_overlay = getattr(args, "video_overlay_text", None)
+    video_overlay = (str(raw_overlay).strip() if raw_overlay is not None else "") or None
+
     dbg_cam = str(args.debug_extra_camera or "").strip()
     dbg_out_dir: Path | None = None
     dbg_live = bool(args.debug_extra_camera_live)
@@ -1003,7 +1082,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                     target_cell=target_cell,
                     enabled=True,
                 )
-                video_writer.append_data(renderer.render())
+                finalize_sim_eval_video_frame(video_writer, renderer, video_overlay)
             if viewer is not None:
                 sync_viewer_task_guides(
                     viewer,
@@ -1095,7 +1174,7 @@ def main_instruction_sequence(args: argparse.Namespace) -> int:
                         target_cell=target_cell,
                         enabled=True,
                     )
-                video_writer.append_data(renderer.render())
+                finalize_sim_eval_video_frame(video_writer, renderer, video_overlay)
 
             if dbg_cam:
                 save_every = int(args.debug_extra_camera_every)
@@ -1191,7 +1270,10 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
         args.video_out = args.video_out.resolve()
         args.video_out.parent.mkdir(parents=True, exist_ok=True)
         video_writer = imageio.get_writer(str(args.video_out), fps=args.video_fps)
-        print(f"Writing video: {args.video_out} (fps={args.video_fps})")
+        print(f"Writing video: {args.video_out} (fps={args.video_fps}, camera={video_cam})")
+
+    raw_overlay = getattr(args, "video_overlay_text", None)
+    video_overlay = (str(raw_overlay).strip() if raw_overlay is not None else "") or None
 
     dbg_cam = str(args.debug_extra_camera or "").strip()
     dbg_out_dir: Path | None = None
@@ -1325,7 +1407,7 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
                     target_cell=target_cell,
                     enabled=True,
                 )
-                video_writer.append_data(renderer.render())
+                finalize_sim_eval_video_frame(video_writer, renderer, video_overlay)
             if viewer is not None:
                 sync_viewer_task_guides(
                     viewer,
@@ -1424,7 +1506,7 @@ def main_eval_pick_place(args: argparse.Namespace) -> None:
                         target_cell=target_cell,
                         enabled=True,
                     )
-                video_writer.append_data(renderer.render())
+                finalize_sim_eval_video_frame(video_writer, renderer, video_overlay)
 
             if dbg_cam:
                 save_every = int(args.debug_extra_camera_every)

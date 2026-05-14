@@ -1,122 +1,92 @@
-# gym-so100-sim
+# Multimodal-State-Conditioned-VLA-for-Tabletop-Block-Assembly
 
-This repository provides **MuJoCo simulation** (Gymnasium single red cube task + 3×3 multicolor `so100_puzzle.xml` + mink IK), plus optional **OpenAI-compatible VLM planning → XVLA policy closed-loop** scripts.
+This repository provides **MuJoCo simulation and LeRobot SO-arm code** to run and evaluate **multimodal state-conditioned VLAs** for tabletop block assembly, **sub-instruction–conditioned** closed-loop pick-and-place with optional **VLM** decomposition and replanning.
 
-**Not included**: LeRobot **record/merge datasets** or general robot pipelines outside this evaluation loop. `vlm_to_actions.py` is **library-only** (OpenAI-compatible `chat/completions`, `plan_vla_instructions`, validators). VLM planning runs **inside** `sim_eval.py` (for simulation) or `real_eval.py` (for physical deployment).
 
-## Dependencies
+## Dependencies and install
 
-- Python **3.10–3.12** (on 3.13, `dm-control`’s `labmaze` often has no prebuilt wheel; 3.12 is recommended).  
-- **Simulation base**: `mujoco`, `dm-control`, `gymnasium`, `numpy`, `mink`  
-- **XVLA + OpenAI-compatible VLM** (optional): `pip install -e ".[xvla]"` → `torch`, `lerobot[transformers-dep]`, `python-dotenv`, `imageio[ffmpeg]`
+- **Python**: `pyproject.toml` requires `>=3.10,<3.13` (e.g. Conda `python=3.12`).
+- **Core** (editable install from this repo): `mujoco`, `gymnasium`, `dm-control`, `mink`, `numpy`, `torch`, `lerobot[transformers-dep]`, `imageio`, `imageio-ffmpeg`, `python-dotenv`, …
+- **Optional**: **OpenCV** (`cv2`) for optional text overlays on sim videos; **`ffmpeg`** on PATH for `tmp_merge_runs_videos.py`.
+- **Tests**: `pip install -e ".[test]"` adds `pytest`.
 
-## Install
-
-```bash
-cd gym-so100-sim
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]"
-# For XVLA / OpenAI-compatible VLM planning runs:
-pip install -e ".[xvla]"
-```
-
-## Usage
-
-**Gymnasium environment** (`so100_transfer_cube.xml`):
-
-```python
-import gymnasium as gym
-import gym_so100  # noqa: F401
-
-env = gym.make("gym_so100/SO100TouchCube-v0")
-obs, _ = env.reset(seed=0)
-```
-
-**3×3 pick-and-place** (run from the repo root so `gym_so100/assets/so100_puzzle.xml` resolves):
+Use **Miniconda / Anaconda** (or Mambaforge). Install PyTorch in the env first if you prefer the conda-forge CUDA stack; otherwise the commands below rely on `pip` inside the env to satisfy `pyproject.toml`.
 
 ```bash
-# sim_scenes.py: --color {yellow|green|purple|orange} --cube-idx N --cell 0-8 [--seed] [--no-viewer] [--speed]
+cd Multimodal-State-Conditioned-VLA-for-Tabletop-Block-Assembly   # or your clone directory name
+
+# New environment (pick a Python version in [3.10, 3.12]; env name can be anything short)
+conda create -n msc-vla-tabletop python=3.12 -y
+conda activate msc-vla-tabletop
+
+# Optional: CUDA PyTorch from conda-forge/nvidia channels, then skip torch on pip if already satisfied
+# conda install pytorch pytorch-cuda=12.4 -c pytorch -c nvidia -y   # adjust CUDA version to your driver
+
+pip install -e .
+```
+
+## Configuration
+
+Copy **`.env.example`** to **`.env`** and fill in `OPENAI_API_KEY`, etc. Sim scripts also accept **`--dotenv`**. Use **`HF_TOKEN`** if you pull policies from the Hub.
+
+## Simulation entrypoints
+
+### `sim_scenes.py`
+
+3×3 puzzle scene: pick color, cube index, target cell, optional viewer. See `--help`.
+
+```bash
 python sim_scenes.py --color orange --cube-idx 2 --cell 2 --seed 42
-# vla_to_actions.py: fixed-layout demo [--no-viewer] [--speed]
-python vla_to_actions.py
 ```
 
-### OpenAI-compatible VLM → XVLA (simulation)
+### `sim_eval.py`
 
-1. Set `OPENAI_API_KEY`. Optional: `OPENAI_BASE_URL` (default `https://api.openai.com/v1`), `OPENAI_MODEL`, `OPENAI_VISION_MODEL`, `OPENAI_PLAN_MODEL` (see `vlm_to_actions.py`), and/or a project-root `.env`; or pass `--dotenv /path/to/.env` on `sim_eval.py`.  
-2. Prepare a **LeRobot v3 dataset root** consistent with training (including `meta/info.json`) for preprocessor stats.  
-3. From the repo root (`sim_eval.py` requires **either** `--policy-id` **or** `--policy-path`):
+- **Default**: random pick-place episodes (`--policy-id` or `--policy-path`, plus `--dataset-root`).
+- **Instruction mode** (exactly one): `--instructions-file`, `--instructions-json`, or `--from-vlm-text` (single-shot VLM planning).
+- Common flags: `--render`, `--video-out` / `--video-camera` / `--video-fps` / `--video-overlay-text`, `--visual-task-guides`, JSON output flags.
 
 ```bash
-# Random episodes (default): no instruction flags
-python sim_eval.py --policy-id YOUR/HF_REPO --dataset-root /path/to/lerobot_dataset --render
+python sim_eval.py --policy-id OWNER/REPO --dataset-root /path/to/lerobot_dataset --render
 
-# Instruction sequence: exactly one of --instructions-file | --instructions-json | --from-vlm-text
 python sim_eval.py \
-  --from-vlm-text "Form an X with cubes on the 3×3 grid." \
-  --policy-id YOUR/HF_REPO \
+  --instructions-file plan.json \
+  --policy-id OWNER/REPO \
   --dataset-root /path/to/lerobot_dataset \
-  --seed 0 --render --visual-task-guides
-
-# Or load instructions from JSON
-python sim_eval.py \
-  --instructions-file /tmp/plan.json \
-  --policy-id YOUR/HF_REPO \
-  --dataset-root /path/to/lerobot_dataset \
-  --seed 0 --render --visual-task-guides
+  --seed 0 --render
 ```
 
-Key files: `sim_scenes.py` (3×3 puzzle / IK CLI), `vla_to_actions.py` (task text, viewer guides, fixed-layout demo), `vla_adapter.py` (LeRobot + pick-place sim control), `sim_eval.py` (XVLA closed-loop eval + instruction / VLM modes), `vlm_to_actions.py` (OpenAI-compatible VLM → instruction list).
+### `sim_vlm_to_actions_eval.py`
 
-### Dual-view calibration (nine-grid)
+Draws prompts from a fixed bank of **30** templates (shuffled in blocks of 30). For each prompt: **render sim snapshots → VLM plan → validate → `sim_eval` instruction sequence**. **Stdout**: NDJSON (one object per prompt), optional final summary line; **`--json-out`** for a pretty-printed file; **`--sim-video-out`** writes one MP4 per prompt (`stem_p000.mp4`, …). Defaults: camera **`cam_oblique`**, video **30 FPS**, user prompt burned into frames (disable with **`--sim-video-no-prompt-overlay`**).
 
-Before running real-robot evaluation, you need a calibration JSON that maps the 3×3 grid cells in both camera views. Use `calibrate_dual_view.py`:
+Each run row includes **`prompt`** (user template only) and **`vla_instructions`** (decomposed policy task lines).
 
-```bash
-python calibrate_dual_view.py \
-  --front /path/to/first_cam_front.png \
-  --side /path/to/first_cam_side.png \
-  --out outputs/real101_nine_grid_calib.json
-```
+Set **`OPENAI_API_KEY`** (see `.env.example`); pass **`--dotenv`** to load a specific env file.
 
-Interactive workflow:
-1. Two images are displayed side-by-side (Front left, Side right).
-2. Click the 9 grid cell centers on the **Front** view in order 0→8 (row-major: top-left is 0, center is 4). Press **Space** when done.
-3. Click the same 9 points on the **Side** view in the same 0→8 order. Press **Space** to finish.
-4. Then click corresponding cube centers — first all visible cubes on Front (Space to advance), then the same cubes in the same order on Side (Space to finish). This estimates a homography for cross-view mapping.
-5. Press **R** to reset the current phase, **Esc** to abort.
+---
 
-Key bindings during calibration: **Left click** = place point, **Space** = confirm phase, **R** = reset current phase, **Esc** = abort.
+## Planning and adapters (libraries)
 
-Optional flags:
-- `--cube-pairs N`: fix exactly N cube pairs (instead of dynamic: click all visible then Space).
-- `--recalibrate`: overwrite an existing output file.
-- `--skip-dialog`: skip the Tkinter popup instructions.
+| File | Role |
+|------|------|
+| `vlm_to_actions.py` | OpenAI-compatible API: `plan_vla_instructions`, validators, inventory alignment |
+| `vla_adapter.py` | Hub/local policy, dataset root, observation batching, MuJoCo actuation |
+| `vla_to_actions.py` | Task parsing, viewer guide geoms, small MuJoCo demo |
 
-The output JSON contains `centers_front`, `centers_side` (9 grid points each) and optionally `cube_pairs_front`/`cube_pairs_side` plus a `view_mapping` with the estimated homography.
+---
 
-**Note on beam overlays (real vs sim):** The real-robot beam overlay in `real_vision.py` uses simplified SAM2 parameters (lower alpha, wider Gaussian sigma) compared to the simulation pipeline, trading fine-grained mask detail for faster rendering on live camera feeds. Beam appearance can be customized by adjusting the hardcoded parameters in `real_vision.py` `BeamOverlayState.compute_statics()`.
+## Real robot and vision
 
-### OpenAI-compatible VLM → XVLA (real robot)
+| File | Role |
+|------|------|
+| `calibrate_dual_view.py` | Dual-view 3×3 grid clicks + cube pairs → calibration JSON |
+| `real_vision.py` | YOLO, SAM2 beam overlay, calibration I/O |
+| `real_eval.py` | LeRobot SO-Follower loop: `--policy-path`, `--dataset-repo-id`, `--user-text`, `--calib-json`, camera indices, `--vis`, `--record-video`, … |
 
-1. Connect your SO-ARM100 and set `OPENAI_API_KEY` (or `DASHSCOPE_API_KEY` if using Qwen). 
-2. Generate a dual-view calibration JSON (see [Dual-view calibration](#dual-view-calibration-nine-grid) above).
-3. From the repo root, run the `real_eval.py` entrypoint:
+Complete calibration and LeRobot/camera setup before real runs; see each script’s `--help`.
 
-```bash
-python real_eval.py \
-  --port COM6 \
-  --policy-path YOUR/HF_REPO \
-  --dataset-repo-id YOUR/DATASET_REPO \
-  --calib-json outputs/real101_nine_grid_calib.json \
-  --user-text "Observe the cubes on the table. Generate at least 2 pick-and-place instructions." \
-  --vis --push-to-hub
-```
+---
 
-Key files: `real_eval.py` (real robot evaluation loop), `real_vision.py` (YOLO board observation, SAM2 attached beam overlays, dual-view calibration loading), `calibrate_dual_view.py` (interactive dual-view nine-grid calibration script).
+## Acknowledgments
 
-## Tests
-
-```bash
-pytest -q
-```
+The **MuJoCo simulation** and **scene / Gymnasium environment** portions of this project **reference and borrow** from **[gym-so100-c](https://github.com/ilonajulczuk/gym-so100-c)** (ilonajulczuk)—a Gym + MuJoCo setup for the SO-100/101 arm that informed our assets and env structure. Thanks to the original authors for sharing that work.

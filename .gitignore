@@ -1,8 +1,6 @@
 # --- git pull / clone shield: keep local-only files out of the repo ---
 # Untracked paths are never merged from upstream; your .env stays local.
 .env
-.env.*
-!.env.example
 
 # Python / tooling
 .venv/

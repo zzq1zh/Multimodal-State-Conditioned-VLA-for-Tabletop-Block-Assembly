@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -42,6 +43,122 @@ import re
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("real_eval")
 
+
+def _wrap_text_lines(text: str, *, max_chars: int, max_lines: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in (text or "").replace("\r", "").split("\n"):
+        s = raw_line.strip()
+        if not s:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        while s:
+            if len(lines) >= max_lines:
+                lines.append("...")
+                return lines
+            lines.append(s[:max_chars])
+            s = s[max_chars:].lstrip()
+    return lines[:max_lines] if lines else [""]
+
+
+def _draw_prompt_strip_bgr(strip_h: int, strip_w: int, vlm_prompt: str, vla_prompt: str) -> np.ndarray:
+    strip = np.zeros((strip_h, strip_w, 3), dtype=np.uint8)
+    y = 16
+    fs = 0.42
+    gap = 15
+    for label, body, color in (
+        ("VLM user prompt", vlm_prompt or "(empty)", (180, 220, 255)),
+        ("VLA prompt (policy task)", vla_prompt or "(empty)", (200, 255, 200)),
+    ):
+        cv2.putText(strip, label + ":", (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+        y += gap
+        for line in _wrap_text_lines(body, max_chars=max(24, strip_w // 7), max_lines=8):
+            cv2.putText(strip, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (230, 230, 230), 1, cv2.LINE_AA)
+            y += 14
+            if y > strip_h - 8:
+                return strip
+        y += 8
+    return strip
+
+
+def _compose_record_frame_bgr(
+    front_rgb: np.ndarray,
+    side_rgb: Optional[np.ndarray],
+    *,
+    vlm_prompt: str,
+    vla_prompt: str,
+    strip_h: int = 160,
+) -> np.ndarray:
+    """Side-by-side RGB cams + bottom strip with VLM / VLA text (BGR output for VideoWriter)."""
+    front_bgr = cv2.cvtColor(front_rgb, cv2.COLOR_RGB2BGR)
+    if side_rgb is not None:
+        sh, sw = side_rgb.shape[:2]
+        fh, fw = front_rgb.shape[:2]
+        if (sh, sw) != (fh, fw):
+            side_rgb = cv2.resize(side_rgb, (fw, fh), interpolation=cv2.INTER_AREA)
+        side_bgr = cv2.cvtColor(side_rgb, cv2.COLOR_RGB2BGR)
+        top = np.hstack([front_bgr, side_bgr])
+    else:
+        top = front_bgr
+    tw = int(top.shape[1])
+    strip = _draw_prompt_strip_bgr(strip_h, tw, vlm_prompt, vla_prompt)
+    return np.vstack([top, strip])
+
+
+def _overlay_prompt_banner_bgr(bgr: np.ndarray, vlm_one_line: str, vla_one_line: str) -> np.ndarray:
+    """Light banner at bottom for live OpenCV windows."""
+    out = bgr.copy()
+    h, w = out.shape[:2]
+    bar_h = 44
+    cv2.rectangle(out, (0, h - bar_h), (w, h), (32, 32, 32), -1)
+    cv2.putText(
+        out,
+        vla_one_line[: max(1, w // 8)],
+        (6, h - 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (200, 255, 200),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        out,
+        vlm_one_line[: max(1, w // 8)],
+        (6, h - 6),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.38,
+        (200, 220, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return out
+
+
+class _VideoSink:
+    """Lazily opens cv2.VideoWriter on first frame."""
+
+    def __init__(self, path: Path, fps: float) -> None:
+        self.path = Path(path)
+        self.fps = float(max(fps, 1e-3))
+        self._writer: Optional[cv2.VideoWriter] = None
+
+    def write(self, frame_bgr: np.ndarray) -> None:
+        if self._writer is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            h, w = frame_bgr.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            self._writer = cv2.VideoWriter(str(self.path), fourcc, self.fps, (w, h))
+            if not self._writer.isOpened():
+                raise RuntimeError(f"Failed to open VideoWriter for {self.path}")
+            log.info(f"Recording video -> {self.path} ({w}x{h} @ {self.fps} fps)")
+        self._writer.write(frame_bgr)
+
+    def release(self) -> None:
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+            log.info(f"Video saved: {self.path}")
+
 def default_yolo_weights_str() -> str:
     local_path = Path(__file__).resolve().parent.parent / "runs" / "detect" / "train_manual_front_only_orange_purple" / "weights" / "best.pt"
     if local_path.is_file():
@@ -63,7 +180,12 @@ def run_vlm_planning(
     yolo_weights: str,
     user_text: str,
     yolo_conf: float = 0.25,
-) -> Tuple[List[str], np.ndarray, np.ndarray, Optional[Dict[str, Any]]]:
+) -> Tuple[List[str], np.ndarray, np.ndarray, Optional[Dict[str, Any]], str]:
+    """
+    Plan with VLM using ``user_text`` + YOLO board text merged for the API call.
+
+    Returns ``vlm_user_prompt``: **only** ``user_text`` (stripped), for display/recording — not the merged planner string.
+    """
     load_env()
     calib = load_calibration_json(calib_json)
     cf = calib["centers_front"]
@@ -82,30 +204,35 @@ def run_vlm_planning(
     )
 
     merged = (user_text + "\n\n" + yolo_text).strip() if user_text else yolo_text
+    vlm_user_prompt = (user_text or "").strip()
 
     import tempfile
+
     tmp = Path(tempfile.mkdtemp(prefix="real_eval_"))
-    pf, ps = tmp / "first_front.png", tmp / "first_side.png"
-    cv2.imwrite(str(pf), front_bgr)
-    cv2.imwrite(str(ps), side_bgr)
+    try:
+        pf, ps = tmp / "first_front.png", tmp / "first_side.png"
+        cv2.imwrite(str(pf), front_bgr)
+        cv2.imwrite(str(ps), side_bgr)
 
-    instructions, raw_text, budget = plan_vla_instructions(
-        merged, image_paths=[pf, ps], inventory_from_vlm=True,
-    )
+        instructions, raw_text, budget = plan_vla_instructions(
+            merged, image_paths=[pf, ps], inventory_from_vlm=True,
+        )
 
-    log.info(f"VLM Budget (Inventory): {budget}")
-    log.info(f"VLM Raw Response:\n{raw_text}\n")
+        log.info(f"VLM Budget (Inventory): {budget}")
+        log.info(f"VLM Raw Response:\n{raw_text}\n")
 
-    ok, errs = validate_instructions(instructions)
-    if errs:
-        log.warning(f"Some instructions failed validation: {errs}")
-    instructions = ok if ok else instructions
+        ok, errs = validate_instructions(instructions)
+        if errs:
+            log.warning(f"Some instructions failed validation: {errs}")
+        instructions = ok if ok else instructions
 
-    log.info(f"VLM planned {len(instructions)} instructions:")
-    for i, inst in enumerate(instructions):
-        log.info(f"  [{i}] {inst}")
+        log.info(f"VLM planned {len(instructions)} instructions:")
+        for i, inst in enumerate(instructions):
+            log.info(f"  [{i}] {inst}")
 
-    return instructions, cf, cs, view_mapping
+        return instructions, cf, cs, view_mapping, vlm_user_prompt
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 def run_one_instruction(
     robot: Any,
@@ -125,6 +252,10 @@ def run_one_instruction(
     calib: dict,
     show_vis: bool = False,
     debug_dir: Optional[Path] = None,
+    *,
+    vlm_prompt: str = "",
+    show_prompt_overlay: bool = False,
+    video_sink: Optional[_VideoSink] = None,
 ):
     policy.reset()
     preprocessor.reset()
@@ -220,10 +351,30 @@ def run_one_instruction(
 
         if show_vis:
             if front_key in obs:
-                cv2.imshow("Front View (Beam Overlay)", cv2.cvtColor(obs[front_key], cv2.COLOR_RGB2BGR))
+                disp_f = cv2.cvtColor(obs[front_key], cv2.COLOR_RGB2BGR)
+                if show_prompt_overlay:
+                    disp_f = _overlay_prompt_banner_bgr(
+                        disp_f,
+                        "VLM user: " + (vlm_prompt.replace("\n", " ")[:200]),
+                        "VLA: " + instruction,
+                    )
+                cv2.imshow("Front View (Beam Overlay)", disp_f)
             if side_key in obs:
-                cv2.imshow("Side View (Beam Overlay)", cv2.cvtColor(obs[side_key], cv2.COLOR_RGB2BGR))
+                disp_s = cv2.cvtColor(obs[side_key], cv2.COLOR_RGB2BGR)
+                if show_prompt_overlay:
+                    disp_s = _overlay_prompt_banner_bgr(
+                        disp_s,
+                        "VLM user: " + (vlm_prompt.replace("\n", " ")[:200]),
+                        "VLA: " + instruction,
+                    )
+                cv2.imshow("Side View (Beam Overlay)", disp_s)
             cv2.waitKey(1)
+
+        if video_sink is not None and front_key in obs:
+            fr = obs[front_key]
+            sr = obs[side_key] if side_key in obs else None
+            rec = _compose_record_frame_bgr(fr, sr, vlm_prompt=vlm_prompt, vla_prompt=instruction)
+            video_sink.write(rec)
 
         if events.get("exit_early") or events.get("stop_recording"):
             events["exit_early"] = False
@@ -314,6 +465,24 @@ def main():
     p.add_argument("--per-instruction-timeout", type=float, default=0.0, help="Max execution seconds per step. <=0 means unlimited.")
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--vis", action="store_true", help="Enable real-time OpenCV visualization")
+    p.add_argument(
+        "--record-video",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Record front|side + VLM/VLA prompt strip to this MP4 (e.g. runs/real_eval.mp4)",
+    )
+    p.add_argument(
+        "--record-fps",
+        type=float,
+        default=None,
+        help="FPS for --record-video (default: same as --fps)",
+    )
+    p.add_argument(
+        "--no-show-prompts",
+        action="store_true",
+        help="Do not draw VLM/VLA prompt banners on --vis windows (prompts are still embedded in --record-video)",
+    )
     p.add_argument("--push-to-hub", action="store_true", help="Push recorded dataset to Hub after execution")
     p.add_argument("--private", action="store_true", help="Upload dataset as private repo")
 
@@ -322,6 +491,7 @@ def main():
 
     dataset = None
     listener = None
+    video_sink: Optional[_VideoSink] = None
 
     yolo_weights = args.yolo_weights if args.yolo_weights else default_yolo_weights_str()
 
@@ -341,6 +511,11 @@ def main():
         if args.instructions_json and args.instructions_json.is_file():
             plan = json.loads(args.instructions_json.read_text(encoding="utf-8"))
             instructions = plan["instructions"]
+            vlm_prompt = (
+                plan.get("vlm_prompt")
+                or plan.get("user_text")
+                or f"(loaded instructions from {args.instructions_json})"
+            )
             if "calibration" in plan:
                 cf = np.array(plan["calibration"]["centers_front"], dtype=np.float32).reshape(9, 2)
                 cs = np.array(plan["calibration"]["centers_side"], dtype=np.float32).reshape(9, 2)
@@ -354,7 +529,7 @@ def main():
         else:
             if not args.calib_json:
                 raise RuntimeError("--calib-json must be provided for live VLM planning.")
-            instructions, cf, cs, view_mapping = run_vlm_planning(
+            instructions, cf, cs, view_mapping, vlm_prompt = run_vlm_planning(
                 front_bgr, side_bgr,
                 calib_json=args.calib_json,
                 yolo_weights=yolo_weights,
@@ -364,6 +539,15 @@ def main():
 
         if not instructions:
             return 1
+
+        log.info("======== VLM user prompt (input only; YOLO/system text not shown here) ========\n%s\n========", vlm_prompt)
+        log.info("Planned %d instruction(s); VLA uses each line as the policy `task` string.", len(instructions))
+
+        if args.record_video:
+            rfps = float(args.record_fps) if args.record_fps is not None else float(args.fps)
+            video_sink = _VideoSink(args.record_video, rfps)
+
+        show_prompt_overlay = bool(args.vis) and not bool(args.no_show_prompts)
 
         if view_mapping is None or homography_front_to_side(view_mapping) is None:
             log.warning("Calibration missing 'view_mapping' (homography front->side).")
@@ -433,6 +617,7 @@ def main():
             if events.get("stop_recording"):
                 break
             log.info(f"\n[{i+1}/{len(instructions)}] {instruction}")
+            log.info("-------- VLA prompt (policy `task`) --------\n%s\n--------", instruction)
             run_one_instruction(
                 robot=robot,
                 policy=policy,
@@ -451,6 +636,9 @@ def main():
                 calib=calib_meta,
                 show_vis=args.vis,
                 debug_dir=args.debug_beam_dir,
+                vlm_prompt=vlm_prompt,
+                show_prompt_overlay=show_prompt_overlay,
+                video_sink=video_sink,
             )
             if i < len(instructions) - 1:
                 time.sleep(2.0)
@@ -484,6 +672,8 @@ def main():
             robot.disconnect()
         if listener:
             listener.stop()
+        if video_sink is not None:
+            video_sink.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

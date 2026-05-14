@@ -9,6 +9,12 @@ resulting XVLA-style instruction list in MuJoCo (same stepping logic as sim_eval
     / (# VLM instructions). Counts come from ``sim_eval.main_instruction_sequence`` via
     ``_sim_eval_instruction_placement_stats`` on the ``sim_args`` namespace.
 
+Each NDJSON ``runs[]`` row's ``prompt`` field is the **user template text only**; the string sent to the VLM
+also appends simulation inventory constraints (see ``sim_eval._append_sim_inventory_to_prompt``) — that appended
+block is not duplicated in ``prompt``. The same row includes ``vla_instructions``: the **decomposed** list of
+per-step policy task strings (XVLA-style lines) produced by planning and passed to ``sim_eval`` when execution
+proceeds (or the list available at the failure stage).
+
 Between prompts, the **same** policy, ``MjModel``, ``Renderer``, and (with ``--render``) passive viewer stay
 alive; only the pick-place scene is **refreshed** (re-keyframe, re-scatter, new VLM snapshots) before the next queue.
 
@@ -27,14 +33,22 @@ disable with ``--no-json-out-file``.
 Progress and fatal configuration errors are one JSON object per line on **stderr** (``kind: "log"`` / ``"fatal"``)
 so stdout stays machine-parseable.
 
-Example::
+Example (30 prompts: **render**, **sim MP4** per prompt, **JSON**). Default sim video uses **``cam_oblique``** (side-style view) and **burns the user prompt** into a bottom caption (OpenCV). With ``--n-prompts`` > 1, ``--sim-video-out runs/vlm_sim.mp4`` becomes ``runs/vlm_sim_p000.mp4``, ``runs/vlm_sim_p001.mp4``, …::
 
-  python sim_vlm_to_actions_eval.py \\
+  mkdir -p runs && python sim_vlm_to_actions_eval.py \\
     --n-prompts 30 \\
     --policy-id YOUR/HF_REPO \\
     --dataset-root /path/to/lerobot_dataset \\
     --device cuda \\
-    --seed 0
+    --seed 0 \\
+    --render \\
+    --sim-video-out runs/vlm_sim.mp4 \\
+    --json-out runs/vlm_eval_seed0_n30.json
+
+Use ``--sim-video-camera cam_global`` for the frontal training camera, or ``--sim-video-no-prompt-overlay`` to omit text on frames.
+
+Omit ``--json-out`` to use the default pretty-printed file ``sim_vlm_eval_seed{seed}_n{n_prompts}.json`` in the cwd.
+Use ``--no-json-out-file`` / ``--no-json-summary-line`` only if you want to suppress file or the final stdout summary line.
 """
 
 from __future__ import annotations
@@ -178,6 +192,7 @@ def _run_one_prompt(
         return {
             "prompt_index": prompt_index,
             "prompt": prompt,
+            "vla_instructions": list(instructions),
             "error": repr(e),
             "total_instructions": 0,
             "successes": 0,
@@ -190,6 +205,7 @@ def _run_one_prompt(
         return {
             "prompt_index": prompt_index,
             "prompt": prompt,
+            "vla_instructions": [],
             "error": "empty_instruction_list",
             "total_instructions": 0,
             "successes": 0,
@@ -201,6 +217,7 @@ def _run_one_prompt(
         return {
             "prompt_index": prompt_index,
             "prompt": prompt,
+            "vla_instructions": list(instructions),
             "error": "validate_instructions: " + "; ".join(errs),
             "total_instructions": len(instructions) if instructions else 0,
             "successes": 0,
@@ -213,6 +230,7 @@ def _run_one_prompt(
             return {
                 "prompt_index": prompt_index,
                 "prompt": prompt,
+                "vla_instructions": list(instructions),
                 "error": vm,
                 "total_instructions": len(instructions),
                 "successes": 0,
@@ -229,6 +247,7 @@ def _run_one_prompt(
         return {
             "prompt_index": prompt_index,
             "prompt": prompt,
+            "vla_instructions": list(instructions),
             "error": nc_err,
             "total_instructions": len(instructions),
             "successes": 0,
@@ -256,6 +275,21 @@ def _run_one_prompt(
         mj_data,
         visual_task_guides=bool(args.visual_task_guides),
     )
+    video_out: Path | None = None
+    if getattr(args, "sim_video_out", None) is not None:
+        base = Path(args.sim_video_out)
+        if base.suffix.lower() not in (".mp4", ".avi", ".mkv", ".webm", ".mov"):
+            base = base.with_suffix(".mp4")
+        if int(args.n_prompts) > 1:
+            video_out = base.parent / f"{base.stem}_p{int(prompt_index):03d}{base.suffix}"
+        else:
+            video_out = base
+
+    video_cam = str(getattr(args, "sim_video_camera", "cam_oblique") or "cam_oblique").strip() or "cam_oblique"
+    overlay_prompt: str | None = None
+    if video_out is not None and not bool(getattr(args, "sim_video_no_prompt_overlay", False)):
+        overlay_prompt = (prompt or "").strip() or None
+
     sim_args = argparse.Namespace(
         instructions_file=None,
         instructions_json=json.dumps({"instructions": instructions}, ensure_ascii=False),
@@ -275,9 +309,10 @@ def _run_one_prompt(
         max_policy_steps=args.max_policy_steps,
         render=args.render,
         visual_task_guides=args.visual_task_guides,
-        video_out=None,
-        video_fps=20,
-        video_camera="cam_global",
+        video_out=video_out,
+        video_fps=int(args.sim_video_fps),
+        video_camera=video_cam,
+        video_overlay_text=overlay_prompt,
         debug_extra_camera=None,
         debug_extra_camera_out_dir=None,
         debug_extra_camera_every=50,
@@ -308,6 +343,7 @@ def _run_one_prompt(
     return {
         "prompt_index": prompt_index,
         "prompt": prompt,
+        "vla_instructions": list(instructions),
         "error": None if rc == 0 else f"sim_eval_return_code={rc}",
         "delegated_to_sim_eval": True,
         "sim_eval_return_code": rc,
@@ -386,6 +422,35 @@ def parse_args() -> argparse.Namespace:
         "--no-json-summary-line",
         action="store_true",
         help="Do not print the final full-summary JSON line to stdout (per-prompt lines still print)",
+    )
+    p.add_argument(
+        "--sim-video-out",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "sim_eval: write MP4 per prompt (default camera: cam_oblique). "
+            "If --n-prompts>1, uses stem_p000.ext, ..."
+        ),
+    )
+    p.add_argument(
+        "--sim-video-fps",
+        type=int,
+        default=30,
+        metavar="FPS",
+        help="FPS for --sim-video-out (default: 30)",
+    )
+    p.add_argument(
+        "--sim-video-camera",
+        type=str,
+        default="cam_oblique",
+        metavar="CAM_NAME",
+        help="MuJoCo camera for --sim-video-out (default: cam_oblique, side-style table view)",
+    )
+    p.add_argument(
+        "--sim-video-no-prompt-overlay",
+        action="store_true",
+        help="Do not draw the user prompt text on sim video frames",
     )
     p.add_argument("--render", action="store_true", help="Pass through to sim_eval instruction viewer")
     return p.parse_args()
@@ -503,6 +568,7 @@ def main() -> int:
             row = {
                 "prompt_index": i,
                 "prompt": prompt,
+                "vla_instructions": [],
                 "error": repr(e),
                 "total_instructions": 0,
                 "successes": 0,

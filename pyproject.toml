@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gym-so100-sim"
+name = "Multimodal-State-Conditioned-VLA-for-Tabletop-Block-Assembly"
 version = "0.1.0"
-description = "SO-ARM100 MuJoCo simulation + optional XVLA/VLM closed-loop eval (Gymnasium, pick-place grid)."
+description = "Multimodal state-conditioned VLA for tabletop block assembly: SO-ARM100 MuJoCo sim + optional XVLA/VLM closed-loop eval (Gymnasium, 3×3 pick-place)."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "Apache-2.0" }
